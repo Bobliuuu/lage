@@ -1,0 +1,10 @@
+; effects are declared and must be granted: lage run examples/files.lg --allow fs.read
+(defn line-count [path]
+  (effects fs.read)
+  (let [text (? (read-file path))] (ok (len (split text "\n")))))
+
+(match (line-count "examples/hello.lg")
+  (ok n)
+  (str "lines: " n)
+  (err e)
+  (str "failed: " e))

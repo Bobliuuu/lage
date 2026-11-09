@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+*.pem
+*.key
+known_hosts
+.env
+vast_api_key
+sw.sh
+*.local.sh

@@ -1,0 +1,15 @@
+[project]
+name = "lage"
+version = "0.1.0"
+description = "A small programming language designed for LLM agents"
+requires-python = ">=3.9"
+
+[project.scripts]
+lage = "lage.cli:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["lage"]

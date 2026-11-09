@@ -1,0 +1,14 @@
+; contracts + inline tests live next to the code
+(defn fact [n]
+  "factorial"
+  (requires (>= n 0))
+  (ensures (>= result 1))
+  (if (<= n 1) 1 (* n (fact (- n 1)))))
+
+(test "fact base" (= (fact 0) 1))
+
+(test "fact 5" (= (fact 5) 120))
+
+(print "fact 10 =" (fact 10))
+
+(fact 20)
