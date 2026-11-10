@@ -12,9 +12,16 @@ import json
 import os
 import re
 import sys
+import types
 import urllib.request
 
 MAXDEPTH = 2500
+DEFAULT_BACKEND = "py"  # "interp" (closure reference) or "py" (python transpiler)
+
+
+def backend_name():
+    b = os.environ.get("LAGE_BACKEND") or DEFAULT_BACKEND
+    return b if b in ("py", "interp") else DEFAULT_BACKEND
 
 
 # --------------------------------------------------------------------------
@@ -144,7 +151,7 @@ def tname(v):
         return "map"
     if isinstance(v, Res):
         return "result"
-    if isinstance(v, (Fn, Builtin)):
+    if isinstance(v, (Fn, Builtin, types.FunctionType)):
         return "fn"
     return type(v).__name__
 
@@ -191,6 +198,8 @@ def show(v):
         return "<fn %s>" % (v.name or "anonymous")
     if isinstance(v, Builtin):
         return "<builtin %s>" % v.name
+    if isinstance(v, types.FunctionType):  # lage fn compiled by the python backend
+        return "<fn %s>" % (getattr(v, "__lname__", None) or "anonymous")
     return str(v)
 
 
@@ -201,7 +210,7 @@ def display(v):
 def to_json(v):
     if isinstance(v, Res):
         return {"ok": to_json(v.val)} if v.ok else {"err": to_json(v.val)}
-    if isinstance(v, (Fn, Builtin)):
+    if isinstance(v, (Fn, Builtin, types.FunctionType)):
         return show(v)
     if isinstance(v, list):
         return [to_json(x) for x in v]
@@ -422,6 +431,13 @@ class TailCall:
 
 
 class Interp:
+    def __new__(cls, *a, **kw):
+        # `Interp(...)` picks the backend (LAGE_BACKEND); subclasses are never redirected
+        if cls is Interp and backend_name() == "py":
+            from .pyback import PyInterp
+            return object.__new__(PyInterp)
+        return object.__new__(cls)
+
     def __init__(self, allow=(), fuel=5_000_000, trace=False, capture=False, root=None, entry=None):
         self.base = Env()
         self.glob = Env(self.base)
