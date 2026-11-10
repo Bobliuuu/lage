@@ -5,33 +5,43 @@
 
 (defn take [n xs]
   "first n elements (all of xs if n >= length, [] if n <= 0)"
+  (sig [int (list a)] (list a))
   (slice xs 0 n))
 
-(defn drop [n xs] "xs without its first n elements" (slice xs n))
+(defn drop [n xs]
+  "xs without its first n elements"
+  (sig [int (list a)] (list a))
+  (slice xs n))
 
 (defn take-while [f xs]
   "longest prefix of xs whose elements all satisfy f"
+  (sig [(fn [a] any) (list a)] (list a))
   (let [i (_idx-where (fn [x] (not (f x))) xs 0)]
     (if (= i -1) xs (slice xs 0 i))))
 
 (defn drop-while [f xs]
   "xs without its longest prefix whose elements satisfy f"
+  (sig [(fn [a] any) (list a)] (list a))
   (let [i (_idx-where (fn [x] (not (f x))) xs 0)] (if (= i -1) [] (slice xs i))))
 
 (defn zip [xs ys]
   "list of [x y] pairs, as long as the shorter list"
+  (sig [(list a) (list b)] (list (list any)))
   (map (fn [i] [(nth xs i) (nth ys i)]) (range (min [(len xs) (len ys)]))))
 
 (defn zip-with [f xs ys]
   "(f x y) over pairs, as long as the shorter list"
+  (sig [(fn [a b] c) (list a) (list b)] (list c))
   (map (fn [i] (f (nth xs i) (nth ys i))) (range (min [(len xs) (len ys)]))))
 
 (defn enumerate [xs]
   "list of [index x] pairs"
+  (sig [(list a)] (list (list any)))
   (map (fn [i] [i (nth xs i)]) (range (len xs))))
 
 (defn flatten [xs]
   "recursively flatten nested lists into one flat list"
+  (sig [(list any)] (list any))
   (reduce
     (fn [acc x]
       (if (= (type x) "list") (concat acc (flatten x)) (append acc x)))
@@ -40,14 +50,17 @@
 
 (defn concat-map [f xs]
   "map f (which returns a list) over xs and concatenate the results"
+  (sig [(fn [a] (list b)) (list a)] (list b))
   (reduce (fn [acc x] (concat acc (f x))) [] xs))
 
 (defn partition [f xs]
   "[matching non-matching] split of xs by predicate f, order kept"
+  (sig [(fn [a] any) (list a)] (list (list a)))
   [(filter f xs) (filter (fn [x] (not (f x))) xs)])
 
 (defn group-by [f xs]
   "map from (str (f x)) to the list of elements with that key, in first-seen key order"
+  (sig [(fn [a] any) (list a)] (map (list a)))
   (reduce
     (fn [acc x] (let [k (str (f x))] (assoc acc k (append (get acc k []) x))))
     {}
@@ -55,27 +68,38 @@
 
 (defn uniq [xs]
   "xs without duplicates, keeping the first occurrence of each"
+  (sig [(list a)] (list a))
   (reduce (fn [acc x] (if (contains? acc x) acc (append acc x))) [] xs))
 
-(defn count [f xs] "number of elements satisfying f" (len (filter f xs)))
+(defn count [f xs]
+  "number of elements satisfying f"
+  (sig [(fn [a] any) (list a)] int)
+  (len (filter f xs)))
 
 (defn find [f xs]
   "first element satisfying f, or nil"
+  (sig [(fn [a] any) (list a)] (opt a))
   (let [i (_idx-where f xs 0)] (if (= i -1) nil (nth xs i))))
 
 (defn any? [f xs]
   "true if some element satisfies f (false for [])"
+  (sig [(fn [a] any) (list a)] bool)
   (>= (_idx-where f xs 0) 0))
 
 (defn all? [f xs]
   "true if every element satisfies f (true for [])"
+  (sig [(fn [a] any) (list a)] bool)
   (= (_idx-where (fn [x] (not (f x))) xs 0) -1))
 
 (defn none? [f xs]
   "true if no element satisfies f (true for [])"
+  (sig [(fn [a] any) (list a)] bool)
   (= (_idx-where f xs 0) -1))
 
-(defn sum-by [f xs] "sum of (f x) over xs (0 for [])" (sum (map f xs)))
+(defn sum-by [f xs]
+  "sum of (f x) over xs (0 for [])"
+  (sig [(fn [a] num) (list a)] num)
+  (sum (map f xs)))
 
 (defn _best-by [better? f xs]
   (if (= (len xs) 0)
@@ -88,14 +112,17 @@
 
 (defn min-by [f xs]
   "element with the smallest (f x); the first one on ties; nil for []"
+  (sig [(fn [a] any) (list a)] (opt a))
   (_best-by (fn [a b] (< a b)) f xs))
 
 (defn max-by [f xs]
   "element with the largest (f x); the first one on ties; nil for []"
+  (sig [(fn [a] any) (list a)] (opt a))
   (_best-by (fn [a b] (> a b)) f xs))
 
 (defn last-n [n xs]
   "last n elements (all of xs if n >= length, [] if n <= 0)"
+  (sig [int (list a)] (list a))
   (if (<= n 0) [] (slice xs (- (len xs) n))))
 
 (defn _chunk [n xs i acc]
@@ -105,11 +132,13 @@
 
 (defn chunk [n xs]
   "split xs into lists of n elements; the last may be shorter"
+  (sig [int (list a)] (list (list a)))
   (requires (> n 0))
   (_chunk n xs 0 []))
 
 (defn interleave [xs ys]
   "alternate elements x1 y1 x2 y2 ...; leftovers of the longer list are appended"
+  (sig [(list a) (list b)] (list any))
   (let [n (min [(len xs) (len ys)])]
     (concat
       (concat-map (fn [i] [(nth xs i) (nth ys i)]) (range n))
@@ -118,10 +147,12 @@
 
 (defn repeat [n x]
   "list of n copies of x ([] if n <= 0)"
+  (sig [int a] (list a))
   (map (fn [i] x) (range n)))
 
 (defn index-by [f xs]
   "map from (str (f x)) to x; later elements win on duplicate keys"
+  (sig [(fn [a] any) (list a)] (map a))
   (reduce (fn [acc x] (assoc acc (str (f x)) x)) {} xs))
 
 (test "take/drop"

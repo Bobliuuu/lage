@@ -1,6 +1,7 @@
 ; std/math: integer and list-of-number helpers.
 (defn clamp [x lo hi]
   "x limited to the range [lo, hi]"
+  (sig [num num num] num)
   (requires (<= lo hi))
   (cond (< x lo) lo (> x hi) hi :else x))
 
@@ -8,46 +9,60 @@
 
 (defn gcd [a b]
   "greatest common divisor of two integers (always >= 0; (gcd 0 0) = 0)"
+  (sig [int int] int)
   (_gcd (abs a) (abs b)))
 
 (defn lcm [a b]
   "least common multiple of two integers (always >= 0; 0 if either is 0)"
+  (sig [int int] int)
   (if (or (= a 0) (= b 0)) 0 (/ (abs (* a b)) (gcd a b))))
 
-(defn sign [x] "-1, 0 or 1" (cond (< x 0) -1 (> x 0) 1 :else 0))
+(defn sign [x] "-1, 0 or 1" (sig [num] int) (cond (< x 0) -1 (> x 0) 1 :else 0))
 
-(defn even? [n] "true if the integer n is even" (= (mod n 2) 0))
+(defn even? [n]
+  "true if the integer n is even"
+  (sig [int] bool)
+  (= (mod n 2) 0))
 
-(defn odd? [n] "true if the integer n is odd" (= (mod n 2) 1))
+(defn odd? [n] "true if the integer n is odd" (sig [int] bool) (= (mod n 2) 1))
 
 (defn _fact [n acc] (if (<= n 1) acc (_fact (- n 1) (* acc n))))
 
-(defn factorial [n] "n! for an integer n >= 0" (requires (>= n 0)) (_fact n 1))
+(defn factorial [n]
+  "n! for an integer n >= 0"
+  (sig [int] int)
+  (requires (>= n 0))
+  (_fact n 1))
 
 (defn _fib [n a b] (if (= n 0) a (_fib (- n 1) b (+ a b))))
 
 (defn fib-iter [n]
   "the n-th Fibonacci number ((fib-iter 0) = 0), tail recursive"
+  (sig [int] int)
   (requires (>= n 0))
   (_fib n 0 1))
 
 (defn digits [n]
   "decimal digits of the integer |n| as a list ((digits 0) = [0])"
+  (sig [int] (list int))
   (map (fn [c] (val (parse-int c))) (chars (str (abs n)))))
 
 (defn mean [xs]
   "arithmetic mean of a non-empty list of numbers"
+  (sig [(list num)] num)
   (requires (> (len xs) 0))
   (/ (sum xs) (len xs)))
 
 (defn median [xs]
   "median of a non-empty list of numbers (mean of the middle two when the length is even)"
+  (sig [(list num)] num)
   (requires (> (len xs) 0))
   (let [s (sort xs) n (len s) h (floor (/ n 2))]
     (if (= (mod n 2) 1) (nth s h) (/ (+ (nth s (- h 1)) (nth s h)) 2))))
 
 (defn divmod [a b]
   "[quotient remainder] with floor semantics (remainder has the sign of b)"
+  (sig [num num] (list num))
   (requires (!= b 0))
   (let [r (mod a b)] [(/ (- a r) b) r]))
 

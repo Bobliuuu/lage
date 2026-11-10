@@ -1,23 +1,28 @@
 ; std/str: string utilities.
 (defn repeat-str [s n]
   "s repeated n times (\"\" if n <= 0)"
+  (sig [str int] str)
   (join "" (map (fn [i] s) (range n))))
 
 (defn pad-left [s n ch]
   "pad s on the left with the string ch up to length n (unchanged if already longer)"
+  (sig [str int str] str)
   (concat (repeat-str ch (- n (len s))) s))
 
 (defn pad-right [s n ch]
   "pad s on the right with the string ch up to length n (unchanged if already longer)"
+  (sig [str int str] str)
   (concat s (repeat-str ch (- n (len s)))))
 
 (defn center [s n ch]
   "pad s on both sides with ch up to length n; the extra pad goes on the right"
+  (sig [str int str] str)
   (let [total (- n (len s)) left (floor (/ (max [total 0]) 2))]
     (concat (repeat-str ch left) s (repeat-str ch (- (max [total 0]) left)))))
 
 (defn lines [s]
   "split on newlines; one trailing newline does not create an extra empty line; \"\" gives []"
+  (sig [str] (list str))
   (cond
     (= s "")
     []
@@ -28,22 +33,29 @@
 
 (defn unlines [ls]
   "join lines, ending each with a newline (inverse of lines)"
+  (sig [(list str)] str)
   (join "" (map (fn [l] (concat l "\n")) ls)))
 
 (defn words [s]
   "split on runs of spaces, tabs and newlines; no empty words"
+  (sig [str] (list str))
   (filter
     (fn [w] (!= w ""))
     (split (replace (replace s "\n" " ") "\t" " ") " ")))
 
-(defn unwords [ws] "join words with single spaces" (join " " ws))
+(defn unwords [ws]
+  "join words with single spaces"
+  (sig [(list str)] str)
+  (join " " ws))
 
 (defn capitalize [s]
   "upper-case the first character, leave the rest unchanged (\"\" stays \"\")"
+  (sig [str] str)
   (if (= s "") "" (concat (upper (slice s 0 1)) (slice s 1))))
 
 (defn truncate [s n]
   "at most n characters; longer strings end in \"...\" (cut hard if n < 3)"
+  (sig [str int] str)
   (requires (>= n 0))
   (cond
     (<= (len s) n)
@@ -53,10 +65,14 @@
     :else
     (concat (slice s 0 (- n 3)) "...")))
 
-(defn surround [s left right] "left + s + right" (concat left s right))
+(defn surround [s left right]
+  "left + s + right"
+  (sig [str str str] str)
+  (concat left s right))
 
 (defn count-substr [s sub]
   "number of non-overlapping occurrences of sub in s"
+  (sig [str str] int)
   (requires (!= sub ""))
   (- (len (split s sub)) 1))
 
