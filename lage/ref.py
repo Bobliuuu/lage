@@ -21,6 +21,9 @@ MODULES  (import "lib/m.lg" :as m) then (m/name ..). Paths are relative to the i
          Names starting with _ are private. Module tests are not run on import.
 TAILS    calls in tail position (last expr of fn/if/cond/let/do/match/and/or) run in constant depth; a fn
          with (ensures ..) is the exception. Non-tail recursion is capped at 2500 frames.
+BACKEND  default `py` transpiles to Python (fast); `interp` is the reference closure interpreter (env LAGE_BACKEND
+         too). Same results; differences: fuel counts user-fn calls only, effects are lexical, forms nested
+         >~100 deep raise E_INTERNAL (use --backend interp).
 TESTS    (test "n" (= a b)) never run by `lage run`; `lage test f.lg` runs them and reports left/right.
 BUILTINS + - * / mod = != < > <= >= not | len first rest last cons append nth get assoc dissoc keys vals
          has? contains? range map filter reduce sort(xs key?) reverse concat sum min max
@@ -28,7 +31,7 @@ BUILTINS + - * / mod = != < > <= >= not | len first rest last cons append nth ge
          abs floor ceil round pow sqrt slice chars index-of
          to-json from-json type assert print read-file write-file http-get now
 COMMANDS lage check FILE|- [--json]   static pass: ALL unbound names, arity, undeclared effects, syntax, imports, types
-         lage run FILE|- [--json] [--allow E,..] [--fuel N] [--trace] [--no-check]   (runs `check` first)
+         lage run FILE|- [--json] [--allow E,..] [--fuel N] [--trace] [--no-check] [--backend py|interp]   (runs `check` first)
          lage test FILE|- [--json]   lage fmt FILE|- [--write|--check]   lage ref
 OUTPUT   --json => one JSON object: {ok,value,stdout,steps,effects_used,trace?} or {ok:false,error:{code,
          message,file?,line,col,source,hint,stack}}; check failures add diagnostics:[every error]. Exit 0 ok, 1 runtime/test failure, 2 parse/usage.

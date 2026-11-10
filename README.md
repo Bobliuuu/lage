@@ -52,8 +52,19 @@ python3 -m unittest discover -s tests
 or `{"ok":false,"error":{"code":"E_UNBOUND","message":..,"line":1,"col":2,"hint":..}}`.
 Exit codes: 0 ok, 1 runtime or test failure, 2 parse or usage error.
 
+## Speed
+
+The default backend transpiles lage to Python source and execs it; the closure interpreter stays as the
+reference (`--backend interp`) and the two are differential-tested on 130+ programs. `python3 bench/bench.py`:
+
+| case | interp (s) | py (s) |
+|---|---|---|
+| fib(27) | 2.5 | 0.06 |
+| tail-recursive sum to 1e6 | 3.2 | 0.09 |
+| map/filter/reduce over 200k | 0.76 | 0.085 |
+
 ## Status
 
-v0.2: closure-compiling interpreter (about 1.8x faster than the v0.1 tree walker on fib(27)),
-tail-call elimination, modules, static checker, formatter, test runner, 34 unit/CLI tests.
-Not yet: static types, a standard library of modules, a bytecode or native backend.
+v0.3: transpiling backend with tail calls, gradual static types, stdlib (6 modules), modules, whole-program
+static checker, formatter, test runner, 211 tests (run on both backends).
+Not yet: native/bytecode compilation beyond Python, sig-annotated stdlib, optional/variadic user-fn params.
