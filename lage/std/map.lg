@@ -1,22 +1,27 @@
 ; std/map: map utilities. Keys are strings (keywords and strings are the same key).
 (defn merge [a b]
   "union of two maps; on shared keys b wins"
+  (sig [(map a) (map a)] (map a))
   (reduce (fn [acc k] (assoc acc k (get b k))) a (keys b)))
 
 (defn merge-all [ms]
   "merge a list of maps left to right; later wins ({} for [])"
+  (sig [(list (map a))] (map a))
   (reduce merge {} ms))
 
 (defn select-keys [m ks]
   "map with only the keys in ks that exist in m"
+  (sig [(map a) (list str)] (map a))
   (reduce (fn [acc k] (if (has? m k) (assoc acc k (get m k)) acc)) {} ks))
 
 (defn map-vals [f m]
   "apply f to every value"
+  (sig [any (map a)] (map any))
   (reduce (fn [acc k] (assoc acc k (f (get m k)))) {} (keys m)))
 
 (defn filter-vals [f m]
   "keep entries whose value satisfies f"
+  (sig [(fn [a] any) (map a)] (map a))
   (reduce
     (fn [acc k] (if (f (get m k)) (assoc acc k (get m k)) acc))
     {}
@@ -24,14 +29,17 @@
 
 (defn map-keys [f m]
   "apply f (returning a string or keyword) to every key; later wins on collisions"
+  (sig [(fn [str] str) (map a)] (map a))
   (reduce (fn [acc k] (assoc acc (f k) (get m k))) {} (keys m)))
 
 (defn update [m k f]
   "set key k to (f current-value); the current value is nil when k is missing"
+  (sig [(map a) str (fn [a] a)] (map a))
   (assoc m k (f (get m k))))
 
 (defn get-in [m path]
   "value at the list of keys/indexes path through nested maps and lists; nil if missing"
+  (sig [any (list any)] any)
   (cond
     (= (len path) 0)
     m
@@ -44,6 +52,7 @@
 
 (defn assoc-in [m path v]
   "set the value at path (a non-empty list of keys) through nested maps, creating maps as needed"
+  (sig [any (list any) any] (map any))
   (requires (> (len path) 0))
   (let [k (first path)]
     (if (= (len path) 1)
@@ -55,14 +64,17 @@
 
 (defn from-pairs [ps]
   "map from a list of [key value] pairs; later wins"
+  (sig [(list (list any))] (map any))
   (reduce (fn [acc p] (assoc acc (nth p 0) (nth p 1))) {} ps))
 
 (defn to-pairs [m]
   "list of [key value] pairs in key order"
+  (sig [(map a)] (list (list any)))
   (map (fn [k] [k (get m k)]) (keys m)))
 
 (defn invert [m]
   "swap keys and values; values become keys via str; later wins"
+  (sig [(map any)] (map str))
   (reduce (fn [acc k] (assoc acc (str (get m k)) k)) {} (keys m)))
 
 (test "merge"

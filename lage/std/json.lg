@@ -31,6 +31,7 @@
 
 (defn pretty [v]
   "JSON text for v, indented two spaces per level; empty lists and maps print as [] and {}"
+  (sig [any] str)
   (_pp v 0))
 
 (defn _path [data path i]
@@ -51,6 +52,7 @@
 
 (defn get-path [data path]
   "(ok value) at the list of keys/indexes path, or (err message) naming the first missing step"
+  (sig [any (list any)] (result any str))
   (_path data path 0))
 
 (test "pretty scalars"
