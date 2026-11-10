@@ -397,7 +397,7 @@ class TailCall:
 
 
 class Interp:
-    def __init__(self, allow=(), fuel=5_000_000, trace=False, capture=False, root=None):
+    def __init__(self, allow=(), fuel=5_000_000, trace=False, capture=False, root=None, entry=None):
         self.base = Env()
         self.glob = Env(self.base)
         self.allow, self.fuel, self.used = set(allow), fuel, 0
@@ -408,7 +408,8 @@ class Interp:
         self.effects_used = set()
         self.root = os.path.realpath(root or os.getcwd())
         self.cur_dir = self.root
-        self.modules, self.loading, self.module_depth = {}, [], 0
+        self.modules, self.module_depth = {}, 0
+        self.loading = [os.path.realpath(entry)] if entry else []
         self.special = {
             "def": self.c_def, "defn": self.c_defn, "fn": self.c_fn, "if": self.c_if,
             "let": self.c_let, "do": self.c_do, "and": self.c_and, "or": self.c_or,

@@ -1,0 +1,8 @@
+; module: names starting with _ are private
+(defn _sq [x] (* x x))
+
+(defn hypot2 [a b] "squared hypotenuse" (+ (_sq a) (_sq b)))
+
+(def pi-ish 3)
+
+(test "module tests are not run by importers" (= 1 2))

@@ -11,15 +11,20 @@ RESULTS  no exceptions. fallible builtins return (ok v) / (err e). (? r) unwraps
 CONTRACT (requires c) checked on entry; (ensures c) on exit with `result` bound. Failure = E_REQUIRES/E_ENSURES.
 EFFECTS  fs.read fs.write net time. A fn must declare (effects ..) to use or call them AND the run must
          grant them: `lage run f.lg --allow fs.read` (prefix grants all: --allow fs, or --allow '*').
+MODULES  (import "lib/m.lg" :as m) then (m/name ..). Paths are relative to the importing file and must stay
+         inside the entry file's directory. Names starting with _ are private. Module tests are not run.
+TAILS    calls in tail position (last expr of fn/if/cond/let/do/match/and/or) run in constant depth; a fn
+         with (ensures ..) is the exception. Non-tail recursion is capped at 2500 frames.
 TESTS    (test "n" (= a b)) never run by `lage run`; `lage test f.lg` runs them and reports left/right.
 BUILTINS + - * / mod = != < > <= >= not | len first rest last cons append nth get assoc dissoc keys vals
          has? contains? range map filter reduce sort(xs key?) reverse concat sum min max
          str split join trim upper lower replace starts-with? ends-with? parse-int
          to-json from-json type assert print read-file write-file http-get now
-COMMANDS lage run FILE|- [--json] [--allow E,..] [--fuel N] [--trace]   lage test FILE|- [--json]
-         lage fmt FILE|- [--write|--check]   lage ref
+COMMANDS lage check FILE|- [--json]   static pass: ALL unbound names, arity, undeclared effects, syntax, imports
+         lage run FILE|- [--json] [--allow E,..] [--fuel N] [--trace] [--no-check]   (runs `check` first)
+         lage test FILE|- [--json]   lage fmt FILE|- [--write|--check]   lage ref
 OUTPUT   --json => one JSON object: {ok,value,stdout,steps,effects_used,trace?} or {ok:false,error:{code,
-         message,line,col,source,hint,stack}}. Exit 0 ok, 1 runtime/test failure, 2 parse/usage.
+         message,file?,line,col,source,hint,stack}}; check failures add diagnostics:[every error]. Exit 0 ok, 1 runtime/test failure, 2 parse/usage.
 ERRORS   E_PARSE E_SYNTAX E_UNBOUND E_TYPE E_ARITY E_NOT_FN E_INDEX E_DIV E_ASSERT E_REQUIRES E_ENSURES
-         E_EFFECT_UNDECLARED E_EFFECT_DENIED E_FUEL E_DEPTH E_MATCH E_TRY_TOP E_FMT_COMMENT E_RUNTIME
+         E_EFFECT_UNDECLARED E_EFFECT_DENIED E_FUEL E_DEPTH E_IMPORT E_MATCH E_TRY_TOP E_FMT_COMMENT E_RUNTIME
 '''

@@ -1,8 +1,10 @@
 import argparse
 import json
+import os
 import sys
 import threading
 
+from .check import check
 from .core import Interp, LageError, format_source, show, to_json
 from .ref import REF
 
@@ -15,13 +17,59 @@ def _emit(obj):
     sys.stdout.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
+def _root(a):
+    return os.path.dirname(os.path.abspath(a.file)) if a.file != "-" else os.getcwd()
+
+
 def _allow(a):
     return [x for x in (a.allow or "").split(",") if x]
 
 
+def _precheck(a, src):
+    """Run the static checker; print diagnostics and return an exit code, or None if clean."""
+    if getattr(a, "no_check", False):
+        return None
+    try:
+        diags = check(src, _root(a), a.file if a.file != "-" else None)
+    except RecursionError:
+        return None
+    errs = [d for d in diags if d["severity"] == "error"]
+    if not errs:
+        return None
+    if a.json:
+        _emit({"ok": False, "error": errs[0], "diagnostics": errs, "stdout": "", "steps": 0})
+    else:
+        for d in errs:
+            _print_diag(d)
+    return 2 if any(d["code"] == "E_PARSE" for d in errs) else 1
+
+
+def _print_diag(d):
+    where = "%s%s" % (d["file"] + ":" if "file" in d else "", "%s:%s" % (d["line"], d["col"]) if "line" in d else "")
+    sys.stderr.write("%s%s: %s\n" % (d["code"], " at " + where if where else "", d["message"]))
+    if d.get("hint"):
+        sys.stderr.write("  hint: %s\n" % d["hint"])
+
+
+def cmd_check(a):
+    src = _read(a.file)
+    diags = check(src, _root(a), a.file if a.file != "-" else None)
+    bad = [d for d in diags if d["severity"] == "error"]
+    if a.json:
+        _emit({"ok": not bad, "diagnostics": diags})
+    else:
+        for d in diags:
+            _print_diag(d)
+        print("ok" if not bad else "%d problem(s)" % len(bad))
+    return 2 if any(d["code"] == "E_PARSE" for d in bad) else (1 if bad else 0)
+
+
 def cmd_run(a):
     src = _read(a.file)
-    it = Interp(_allow(a), a.fuel, a.trace, capture=a.json)
+    rc = _precheck(a, src)
+    if rc is not None:
+        return rc
+    it = Interp(_allow(a), a.fuel, a.trace, capture=a.json, root=_root(a), entry=a.file if a.file != "-" else None)
     try:
         val = it.run(src)
     except LageError as e:
@@ -47,7 +95,10 @@ def cmd_run(a):
 
 def cmd_test(a):
     src = _read(a.file)
-    it = Interp(_allow(a), a.fuel, capture=True)
+    rc = _precheck(a, src)
+    if rc is not None:
+        return rc
+    it = Interp(_allow(a), a.fuel, capture=True, root=_root(a), entry=a.file if a.file != "-" else None)
     try:
         it.run(src)
     except LageError as e:
@@ -94,9 +145,14 @@ def main(argv=None):
         s.add_argument("--json", action="store_true")
         s.add_argument("--allow", default="")
         s.add_argument("--fuel", type=int, default=5_000_000)
+        s.add_argument("--no-check", action="store_true", help="skip the static pre-check")
         if name == "run":
             s.add_argument("--trace", action="store_true")
         s.set_defaults(fn=fn)
+    s = sub.add_parser("check")
+    s.add_argument("file")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_check)
     s = sub.add_parser("fmt")
     s.add_argument("file")
     s.add_argument("--write", action="store_true")

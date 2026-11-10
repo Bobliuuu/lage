@@ -1,0 +1,5 @@
+(import "lib/mathx.lg" :as m)
+
+(test "hypot2" (= (m/hypot2 3 4) 25))
+
+(m/hypot2 3 4)

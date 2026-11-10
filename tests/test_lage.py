@@ -4,6 +4,7 @@ import subprocess
 import sys
 import unittest
 
+from lage.check import check
 from lage.core import Interp, LageError, format_source
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,6 +104,64 @@ class Lang(unittest.TestCase):
         self.assertEqual(run("(keys {:b 1 :a 2})")[0], ["b", "a"])
 
 
+def codes(src, **kw):
+    return sorted(d["code"] for d in check(src, root=ROOT, **kw))
+
+
+class Static(unittest.TestCase):
+    def test_clean_programs(self):
+        self.assertEqual(codes("(defn f [x] (g x)) (defn g [y] y) (f 1)"), [])  # forward ref in fn ok
+        self.assertEqual(codes('(defn f [p] (effects fs.read) (map (fn [q] (read-file q)) [p]))'), [])
+        self.assertEqual(codes("(defn f [n] (ensures (> result 0)) 1) (test \"t\" (= (f 1) 1))"), [])
+
+    def test_reports_everything_at_once(self):
+        src = "(defn f [x] (prnt x)) (f 1 2) (nth [1]) (zzz)"
+        self.assertEqual(codes(src), ["E_ARITY", "E_ARITY", "E_UNBOUND", "E_UNBOUND"])
+
+    def test_top_level_use_before_define(self):
+        d = check("(g 1) (defn g [x] x)", root=ROOT)
+        self.assertEqual(d[0]["code"], "E_UNBOUND")
+        self.assertIn("move it above", d[0]["hint"])
+
+    def test_effects(self):
+        self.assertEqual(codes("(defn f [p] (read-file p))"), ["E_EFFECT_UNDECLARED"])
+        self.assertEqual(codes("(defn g [] (effects fs.read) 1) (defn f [] (g))"), ["E_EFFECT_UNDECLARED"])
+        self.assertEqual(codes("(defn g [] (effects fs.read) 1) (defn f [] (effects fs) (g))"), [])
+
+    def test_syntax_and_parse(self):
+        self.assertEqual(codes("(if 1)"), ["E_SYNTAX"])
+        self.assertEqual(codes("(+ 1"), ["E_PARSE"])
+        self.assertEqual(codes("(1 2)"), ["E_NOT_FN"])
+
+    def test_locals_shadow_builtins_and_defs(self):
+        self.assertEqual(codes("(defn f [len] (len 1 2 3))"), [])
+        self.assertEqual(codes("(let [len (fn [a b c] a)] (len 1 2 3))"), [])
+
+
+class Modules(unittest.TestCase):
+    def test_import_run_and_checker(self):
+        p = os.path.join(ROOT, "examples", "use_lib.lg")
+        src = open(p).read()
+        self.assertEqual(check(src, path=p), [])
+        it = Interp(capture=True, root=os.path.dirname(p), entry=p)
+        self.assertEqual(it.run(src), 25)
+        self.assertEqual(len(it.tests), 1)  # module tests are not collected
+
+    def test_private_names_not_exported(self):
+        p = os.path.join(ROOT, "examples", "use_lib.lg")
+        src = open(p).read() + "(m/_sq 2)"
+        self.assertEqual(codes(src, path=p), ["E_UNBOUND"])
+
+    def test_checker_flags_bad_call_into_module(self):
+        p = os.path.join(ROOT, "examples", "use_lib.lg")
+        d = check('(import "lib/mathx.lg" :as m) (m/hypot2 1)', root=ROOT, path=os.path.join(ROOT, "examples", "x.lg"))
+        self.assertEqual([x["code"] for x in d], ["E_ARITY"])
+
+    def test_escape_and_missing(self):
+        self.assertEqual(err('(import "../../etc/passwd" :as p)', root=ROOT).code, "E_IMPORT")
+        self.assertEqual(err('(import "nope.lg" :as p)', root=ROOT).code, "E_IMPORT")
+
+
 class Fmt(unittest.TestCase):
     def test_idempotent_and_keeps_top_comments(self):
         src = "; hi\n(defn   f [x]\n (+ x 1))\n(def y   {:a 1})"
@@ -123,9 +182,10 @@ class Fmt(unittest.TestCase):
         self.assertEqual(c.exception.code, "E_FMT_COMMENT")
 
     def test_examples_canonical(self):
-        for n in os.listdir(os.path.join(ROOT, "examples")):
-            s = open(os.path.join(ROOT, "examples", n)).read()
-            self.assertEqual(format_source(s), s, n)
+        for d, _, names in os.walk(os.path.join(ROOT, "examples")):
+            for n in names:
+                s = open(os.path.join(d, n)).read()
+                self.assertEqual(format_source(s), s, n)
 
 
 class Cli(unittest.TestCase):
@@ -152,6 +212,19 @@ class Cli(unittest.TestCase):
         d = json.loads(self.sh("run", "-", "--json", stdin="(defn f [x] (+ 1 (f x))) (f 1)").stdout)
         self.assertEqual(d["error"]["code"], "E_DEPTH")
         self.assertEqual(d["error"]["stack"], ["f x2500"])
+
+    def test_run_prechecks(self):
+        r = self.sh("run", "-", "--json", stdin="(defn f [x] (prnt x)) (print 1)")
+        d = json.loads(r.stdout)
+        self.assertEqual((r.returncode, d["error"]["code"], d["steps"]), (1, "E_UNBOUND", 0))
+        r = self.sh("run", "-", "--json", "--no-check", stdin="(defn f [x] (prnt x)) (+ 1 2)")
+        self.assertEqual(json.loads(r.stdout)["value"], 3)
+
+    def test_check_cmd(self):
+        r = self.sh("check", "-", "--json", stdin="(nth [1]) (zz)")
+        d = json.loads(r.stdout)
+        self.assertEqual((r.returncode, d["ok"], len(d["diagnostics"])), (1, False, 2))
+        self.assertEqual(self.sh("check", "examples/use_lib.lg").returncode, 0)
 
     def test_ref(self):
         self.assertIn("lage 0.1", self.sh("ref").stdout)
