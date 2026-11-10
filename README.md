@@ -25,6 +25,7 @@ Reference implementation in Python (stdlib only). Files use the `.lg` extension.
 | Wrong-type bugs that only show at runtime | Optional gradual types: `(sig [int (list str)] (result int str))`. Generics via lowercase type variables, `nil`-safety (`(if c 1 nil)` is not an `int`), result/`?`/`match` checking, builtin signatures. Unannotated code is never an error source; types are static only. |
 | Runaway loops | Fuel budget (`--fuel`) and a call-depth cap. `E_FUEL` / `E_DEPTH`, never a hang. Tail calls run in constant depth. |
 | Growing past one file | `(import "lib/m.lg" :as m)` with `m/name` calls. Imports are confined to the entry file's directory, cycles are errors, `_private` names stay private, the checker follows imports. |
+| Variadic / optional params | `(defn f [a (b 10) & more] ...)`: `(b 10)` is optional (default evaluated per call, sees earlier params), `& more` collects the rest into a list; `(sig [int int & str] int)` types them. |
 | Exceptions to forget | No exceptions. Fallible builtins return `(ok v)` / `(err e)`; `(? r)` propagates. |
 | Non-determinism | Maps keep insertion order; no hidden clocks or randomness (`now` is an effect). |
 | Style drift between edits | `lage fmt` is canonical and idempotent. |
@@ -66,5 +67,5 @@ reference (`--backend interp`) and the two are differential-tested on 130+ progr
 ## Status
 
 v0.3: transpiling backend with tail calls, gradual static types, stdlib (6 modules), modules, whole-program
-static checker, formatter, test runner, 211 tests (run on both backends).
-Not yet: native/bytecode compilation beyond Python, sig-annotated stdlib, optional/variadic user-fn params.
+static checker, formatter, test runner, 318 tests (run on both backends).
+Not yet: native/bytecode compilation beyond Python, sig-annotated stdlib.

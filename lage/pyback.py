@@ -30,7 +30,8 @@ import types
 from collections import Counter
 
 from .core import (MAXDEPTH, Builtin, EarlyReturn, E, Form, Interp, Kw, LageError, Map, Res, Sym, Vec,
-                   covers, display_path, eq, flat, parse_program, show, tname, to_json, truthy, resolve_import)
+                   covers, display_path, eq, flat, parse_program, show, tname, to_json, truthy, resolve_import,
+                   parse_params, param_names, arity_of, arity_text, params_disp)
 
 FT = types.FunctionType
 _ID = re.compile(r"[A-Za-z_][A-Za-z_0-9]*$")
@@ -60,10 +61,13 @@ HEADINFO = {}     # call node id -> ("b", builtin name) | ("v", python name)
 
 
 class FnMeta:
-    __slots__ = ("name", "params", "effects", "outer")
+    __slots__ = ("name", "params", "effects", "outer", "lo", "hi", "disp")
 
-    def __init__(self, name, params, effects, outer):
+    def __init__(self, name, params, effects, outer, lo=None, hi=-1, disp=None):
         self.name, self.params, self.effects, self.outer = name, params, effects, outer
+        self.lo = len(params) if lo is None else lo
+        self.hi = len(params) if hi == -1 else hi  # None = variadic
+        self.disp = " ".join(params) if disp is None else disp
 
     def ctx(self):
         """The lexically enclosing *named* fn (self if named), or None at top level."""
@@ -73,6 +77,9 @@ class FnMeta:
 class PBuiltin(Builtin):
     def __call__(self, *a):
         return self.fn(*a)
+
+
+_UNSET = object()  # default marker of optional params
 
 
 def _tc(r):
@@ -85,6 +92,13 @@ def _tc(r):
 TC_CODE = _tc.__code__
 
 
+def _arity_ok(code, n):
+    m = CODEMETA.get(code)
+    if m is None:
+        return code.co_argcount == n
+    return m.lo <= n and (m.hi is None or n <= m.hi)
+
+
 # --------------------------------------------------------------------------
 # AST helpers
 # --------------------------------------------------------------------------
@@ -95,6 +109,10 @@ SPECIAL_EX = {"def": "x_def", "defn": "x_defn", "fn": "x_fn", "if": "x_if", "let
               "test": "x_test", "import": "x_import"}
 INLINE = {"+": "+", "-": "-", "*": "*", "<": "<", ">": ">", "<=": "<=", ">=": ">=", "=": "==", "!=": "!="}
 BOOLB = {"<", ">", "<=", ">=", "=", "!=", "not", "has?", "contains?", "ok?", "err?", "starts-with?", "ends-with?"}
+
+
+def simple_params(vec):
+    return all(isinstance(p, Sym) and p.name != "&" for p in vec)
 
 
 def kids(x):
@@ -156,12 +174,12 @@ def scan_binders(x, b):
         if isinstance(h, Sym):
             n = h.name
             if n == "fn" and len(x) > 1 and isinstance(x[1], Vec):
-                b.update(p.name for p in x[1] if isinstance(p, Sym))
+                b.update(param_names(x[1]))
             elif n == "defn" and len(x) > 2:
                 if isinstance(x[1], Sym):
                     b[x[1].name] += 1
                 if isinstance(x[2], Vec):
-                    b.update(p.name for p in x[2] if isinstance(p, Sym))
+                    b.update(param_names(x[2]))
             elif n == "def" and len(x) > 1 and isinstance(x[1], Sym):
                 b[x[1].name] += 1
             elif n == "let" and len(x) > 1 and isinstance(x[1], Vec):
@@ -175,6 +193,45 @@ def scan_binders(x, b):
     if isinstance(x, (Form, Vec, Map)):
         for e in x:
             scan_binders(e, b)
+
+
+# Python refuses more than 200 nested brackets (and 100 indentation levels). Any generated expression
+# deeper than BUDGET is moved into a nested helper function `_hN()` (a thunk: it closes over the enclosing
+# function's locals, so lage scoping is untouched); statement nesting deeper than TAIL_IND likewise.
+BUDGET = 60
+CHUNK = 12        # clauses of one cond/and/or chain kept inline before the rest moves into a thunk
+TAIL_IND = 40
+_BRK = re.compile(r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|([()\[\]{}])""")
+_WALRUS = re.compile(r"\(([lg]\d+_\w*) :=")
+_LREF = re.compile(r"\bl(\d+)_")
+_HCALL = re.compile(r"\b(_h\d+)\(\)")
+
+
+def maxdepth(code):
+    d = m = 0
+    for mt in _BRK.finditer(code):
+        c = mt.group(1)
+        if c is None:
+            continue
+        if c in "([{":
+            d += 1
+            if d > m:
+                m = d
+        else:
+            d -= 1
+    return m
+
+
+def deeper_than(x, n):
+    """is the AST nested more than n levels? (iterative, stops early)"""
+    stack = [(x, 0)]
+    while stack:
+        y, d = stack.pop()
+        if isinstance(y, (Form, Vec, Map)):
+            if d >= n:
+                return True
+            stack.extend((e, d + 1) for e in y)
+    return False
 
 
 class Scope:
@@ -206,7 +263,7 @@ class FC:
 
     def __init__(self, meta):
         self.meta, self.lines, self.pre, self.ind, self.nt = meta, [], [], 1, 0
-        self.globals = set()
+        self.globals, self.lifted = set(), []
         self.loop, self.self_name, self.self_pid, self.params = False, None, None, ()
 
     def tmp(self):
@@ -234,10 +291,12 @@ class Gen:
     def __init__(self, it):
         self.it, self.fc, self.mod, self.pending = it, None, None, {}
         self.incall = 0  # >0 while compiling inside a call form of the current fn (mirrors interp annotate)
-        self.uidc = itertools.count(1)
+        self.uidn = 0
+        self.hlevel, self.maxhl = {}, 0  # thunk name -> how many thunk frames deep it can nest
 
     def uid(self):
-        return next(self.uidc)
+        self.uidn += 1
+        return self.uidn
 
     def nid(self, node):
         NODES.append(node)
@@ -282,7 +341,7 @@ class Gen:
         for node, _, _ in forms:
             if isinstance(node, Form) and len(node) >= 4 and isinstance(node[0], Sym) and node[0].name == "defn" \
                     and isinstance(node[1], Sym) and isinstance(node[2], Vec) \
-                    and all(isinstance(p, Sym) for p in node[2]) and mod.binders[node[1].name] == 1 \
+                    and simple_params(node[2]) and mod.binders[node[1].name] == 1 \
                     and "defn" in self.it.special:
                 try:
                     _, _, _, ens, body = self.fn_clauses(node[3:], True, node)
@@ -293,7 +352,8 @@ class Gen:
                 mod.gfun[name] = (not ens) and self.may_tc(name, len(node[2]), body[-1], loop)
 
     def is_loopable(self, name, body, ens):
-        return bool(name) and self.mod.binders[name] == 1 and not ens and not contains_fn(body)
+        return bool(name) and self.mod.binders[name] == 1 and not ens and not contains_fn(body) \
+            and not any(deeper_than(b, 30) for b in body)
 
     def may_tc(self, name, nparams, last, loop):
         sp, bn, bd = self.it.special, self.it.bnames, self.mod.binders
@@ -389,13 +449,83 @@ class Gen:
     def ex(self, x, sc):
         if isinstance(x, Sym):
             return self.sym(x, sc)
+        if isinstance(x, (Form, Vec, Map)):
+            fc = self.fc
+            n, u0 = len(fc.pre), self.uidn
+            code = self.ex1(x, sc)
+            if len(code) > 150 and maxdepth(code) > BUDGET:
+                return self.hoist(code, self.take(n), u0)
+            return code
+        return self.const(x)
+
+    def ex1(self, x, sc):
         if isinstance(x, Form):
             return self.form(x, sc)
         if isinstance(x, Vec):
             return "[" + ", ".join([self.ex(e, sc) for e in x]) + "]"
-        if isinstance(x, Map):
-            return self.mapx(x, sc)
-        return self.const(x)
+        return self.mapx(x, sc)
+
+    # ---- nesting-depth hoisting ----
+    def take(self, n):
+        """remove and return the pending helper lines added since fc.pre had length n"""
+        pre = self.fc.pre
+        out = pre[n:]
+        del pre[n:]
+        return out
+
+    def assigned(self, lines, u0):
+        """(outer lage locals, globals) that walrus-assign inside `lines` and so need nonlocal/global in a helper"""
+        nl, gl = set(), set()
+        for _, t in lines:
+            for m in _WALRUS.finditer(t):
+                n = m.group(1)
+                if n[0] == "g":
+                    gl.add(n)
+                elif int(n[1:n.index("_")]) <= u0:
+                    nl.add(n)
+        return sorted(nl), sorted(gl)
+
+    def thunk_def(self, name, inner, u0):
+        """(lines of `def name():` + inner, dead bindings making the nonlocals legal)"""
+        nl, gl = self.assigned(inner, u0)
+        lvl = 1 + max([self.hlevel.get(m.group(1), 0) for _, t in inner for m in _HCALL.finditer(t)] or [0])
+        self.hlevel[name] = lvl
+        if lvl > self.maxhl:
+            self.maxhl = lvl  # python frames per lage call can reach 1 + maxhl: the recursion limit is scaled
+        head = [(0, "def %s():" % name)]
+        if nl:
+            head.append((1, "nonlocal " + ", ".join(nl)))
+        if gl:
+            head.append((1, "global " + ", ".join(gl)))
+        return [(0, "if 0: %s = None" % n) for n in nl], head + inner
+
+    def hoist(self, code, new, u0):
+        """Move expression `code` (with the helper lines `new` it needs) into a nested function; returns the call.
+        Nested thunks that touch no lage local declared inside this subtree are lifted next to it, not into it,
+        so a long chain of thunks does not nest deeper and deeper."""
+        fc = self.fc
+        name = "_h%d" % self.uid()
+        groups, cur = [], None
+        for i, t in new:
+            if i == 0 or cur is None:
+                cur = []
+                groups.append(cur)
+            cur.append((i, t))
+        inner = []
+        for g in groups:
+            if g[0][1].startswith("if 0: ") or g[0][1].startswith("def _h") and not any(int(m.group(1)) > u0 for _, t in g
+                                                        for m in _LREF.finditer(t)):
+                fc.pre.extend(g)
+            else:
+                inner.extend((i + 1, t) for i, t in g)
+        dead, lines = self.thunk_def(name, [(i, t) for i, t in inner] + [(1, "return " + code)], u0)
+        fc.pre.extend(dead)
+        fc.pre.extend(lines)
+        return name + "()"
+
+    def chain_wrap(self, out, acc, u0):
+        """a cond/and/or chain grew long: move it (and its helper lines) into a thunk"""
+        return self.hoist(out, acc, u0)
 
     def mapx(self, x, sc):
         if not x:
@@ -488,42 +618,64 @@ class Gen:
     def x_and(self, x, sc):
         if len(x) == 1:
             return "True"
+        u0 = self.uidn
+        items = self.chain_items(x, sc)
+        out, acc = self.chain_last(x, sc)
+        n = len(items)
+        for k, (cond, t, pre) in enumerate(reversed(items)):
+            out, acc = "(%s if %s else %s)" % (out, cond, t or "False"), pre + acc
+            if k % CHUNK == CHUNK - 1 and k < n - 1:
+                out, acc = self.chain_wrap(out, acc, u0), []
+        self.fc.pre.extend(acc)
+        return out
+
+    def chain_items(self, x, sc):
+        """operands of and/or except the last: (cond code, temp holding the value | None, helper lines)"""
         items = []
         for b in x[1:-1]:
+            n = len(self.fc.pre)
             if self.isbool(b, sc):
-                items.append((self.ex(b, sc), None))
+                items.append((self.ex(b, sc), None, self.take(n)))
             else:
                 t = self.fc.tmp()
-                items.append(("((%s := %s) is not None and %s is not False)" % (t, self.ex(b, sc), t), t))
+                items.append(("((%s := %s) is not None and %s is not False)" % (t, self.ex(b, sc), t), t,
+                              self.take(n)))
+        return items
+
+    def chain_last(self, x, sc):
+        n = len(self.fc.pre)
         out = self.ex(x[-1], sc)
-        for cond, t in reversed(items):
-            out = "(%s if %s else %s)" % (out, cond, t or "False")
-        return out
+        return out, self.take(n)
 
     def x_or(self, x, sc):
         if len(x) == 1:
             return "False"
-        items = []
-        for b in x[1:-1]:
-            if self.isbool(b, sc):
-                items.append((self.ex(b, sc), None))
-            else:
-                t = self.fc.tmp()
-                items.append(("((%s := %s) is not None and %s is not False)" % (t, self.ex(b, sc), t), t))
-        out = self.ex(x[-1], sc)
-        for cond, t in reversed(items):
-            out = "(%s if %s else %s)" % (t or "True", cond, out)
+        u0 = self.uidn
+        items = self.chain_items(x, sc)
+        out, acc = self.chain_last(x, sc)
+        n = len(items)
+        for k, (cond, t, pre) in enumerate(reversed(items)):
+            out, acc = "(%s if %s else %s)" % (t or "True", cond, out), pre + acc
+            if k % CHUNK == CHUNK - 1 and k < n - 1:
+                out, acc = self.chain_wrap(out, acc, u0), []
+        self.fc.pre.extend(acc)
         return out
 
     def x_cond(self, x, sc):
         if len(x) % 2 == 0:
             raise E("E_SYNTAX", "cond needs test/expr pairs", x, "end with :else expr")
+        u0, fc = self.uidn, self.fc
         pairs = []
         for t, v in zip(x[1::2], x[2::2]):
-            pairs.append((self.truth(t, sc), self.ex(v, sc)))
-        out = "None"
-        for c, v in reversed(pairs):
-            out = "(%s if %s else %s)" % (v, c, out)
+            n = len(fc.pre)
+            c = self.truth(t, sc)
+            pairs.append((c, self.ex(v, sc), self.take(n)))
+        out, acc = "None", []
+        for k, (c, v, pre) in enumerate(reversed(pairs)):
+            out, acc = "(%s if %s else %s)" % (v, c, out), pre + acc
+            if k % CHUNK == CHUNK - 1 and k < len(pairs) - 1:
+                out, acc = self.chain_wrap(out, acc, u0), []
+        fc.pre.extend(acc)
         return out
 
     def x_match(self, x, sc):
@@ -693,6 +845,24 @@ class Gen:
 
     # ---- tail position (statements) ----
     def tail(self, x, sc):
+        fc = self.fc
+        if fc.ind <= TAIL_IND or fc.loop or not isinstance(x, Form):
+            return self.tail1(x, sc)
+        # statement nesting is about to hit python's indentation limit: compile this tail into a helper
+        # function defined at function level, and `return` its result (a value or a pending tail call)
+        u0, saved_pre, saved_loop = self.uidn, fc.pre, fc.loop
+        fc.pre = []
+        try:
+            lines = self.buf(1, lambda: self.tail1(x, sc))
+        finally:
+            fc.pre = saved_pre
+        name = "_h%d" % self.uid()
+        dead, defn = self.thunk_def(name, lines, u0)
+        fc.lifted.extend(dead)
+        fc.lifted.extend(defn)
+        fc.emit("return %s()" % name)
+
+    def tail1(self, x, sc):
         if isinstance(x, Form) and x:
             h = x[0]
             if isinstance(h, Sym) and h.name in self.it.special:
@@ -844,15 +1014,15 @@ class Gen:
 
     # ---- functions ----
     def make_fn(self, name, params, rest, node, named, sc, self_pid):
-        if not isinstance(params, Vec) or not all(isinstance(p, Sym) for p in params):
-            raise E("E_SYNTAX", "params must be a vector of symbols, e.g. [a b]", node)
-        names = [p.name for p in params]
-        if len(set(names)) != len(names):
-            raise E("E_SYNTAX", "duplicate parameter name", node)
+        req_n, opt_x, rest_n = parse_params(params, node)
+        names = req_n + [n for n, _ in opt_x] + ([rest_n] if rest_n else [])
+        variadic = bool(opt_x or rest_n)
         eff, req, _doc, ens, body = self.fn_clauses(rest, named, node)
         outer, saved_incall = self.fc, self.incall
         self.incall = 0
-        meta = FnMeta(name, names, tuple(eff) if named else None, outer.meta.ctx() if outer else None)
+        lo, hi = arity_of(req_n, opt_x, rest_n)
+        meta = FnMeta(name, names, tuple(eff) if named else None, outer.meta.ctx() if outer else None,
+                      lo, hi, params_disp(req_n, opt_x, rest_n))
         mi = len(METAS)
         METAS.append(meta)
         pyname = "f%d_%s" % (self.uid(), mangle(name or "fn"))
@@ -861,7 +1031,7 @@ class Gen:
         pids = [self.declare(fsc, n) for n in names]
         for n in collect_defs(body):
             self.declare(fsc, n)
-        loop = named and self.is_loopable(name, body, ens)
+        loop = named and not variadic and self.is_loopable(name, body, ens)
         try_ = uses_try(body)
         fc = FC(meta)
         fc.loop, fc.self_name, fc.self_pid, fc.params = loop, name if loop else None, self_pid, pids
@@ -878,6 +1048,7 @@ class Gen:
                 else:
                     self.tail(body[-1], fsc)
             body_lines = self.buf(bind, gen_body)
+            body_lines = [(bind + i, t) for i, t in fc.lifted] + body_lines
             args_t = "(%s)" % (", ".join(pids) + ("," if len(pids) == 1 else ""))
 
             def gen_req():
@@ -887,6 +1058,21 @@ class Gen:
                     fc.emit("_req_fail(  #@a%d\n%d, %d, %s)" % (self.nid(r), mi, self.nid(r), args_t))
                     fc.ind -= 1
             req_lines = self.buf(base, gen_req)
+
+            def gen_defaults():
+                # defaults run left to right; a default sees only the params before it
+                dsc = Scope(sc)
+                for n, pid in zip(req_n, pids):
+                    dsc.vars[n] = pid
+                for (n, d), pid in zip(opt_x, pids[len(req_n):]):
+                    fc.emit("if %s is _U:" % pid)
+                    fc.ind += 1
+                    fc.emit("%s = %s" % (pid, self.ex(d, dsc)))
+                    fc.ind -= 1
+                    dsc.vars[n] = pid
+                if rest_n:
+                    fc.emit("%s = [*%s]" % (pids[-1], pids[-1]))
+            def_lines = self.buf(1, gen_defaults) if variadic else []
 
             def gen_ens():
                 esc = Scope(fsc)
@@ -899,9 +1085,16 @@ class Gen:
             ens_lines = self.buf(1, gen_ens) if ens else []
         finally:
             self.fc, self.incall = outer, saved_incall
-        out = [(0, "def %s(%s):" % (pyname, ", ".join(pids))), (1, "_N()  #@P")]
+        sig = list(pids)
+        if variadic:
+            for i in range(len(req_n), len(req_n) + len(opt_x)):
+                sig[i] += "=_U"
+            if rest_n:
+                sig[-1] = "*" + sig[-1]
+        out = [(0, "def %s(%s):" % (pyname, ", ".join(sig))), (1, "_N()  #@P")]
         if meta.effects:
             out.append((1, "_eff(%d)  #@P" % mi))
+        out += def_lines
         if loop:
             out.append((1, "while True:"))
         out += req_lines
@@ -967,7 +1160,7 @@ class PyInterp(Interp):
         for n, b in self.base.v.items():
             ns["bv_" + mangle(n)] = b
             ns["b_" + mangle(n)] = b.fn
-        ns.update(_tc=_tc, EarlyReturn=EarlyReturn, _try=self._h_try, _mres=self._h_mres, _nomatch=self._h_nomatch,
+        ns.update(_U=_UNSET, _tc=_tc, EarlyReturn=EarlyReturn, _try=self._h_try, _mres=self._h_mres, _nomatch=self._h_nomatch,
                   _mk=self._h_mk, _defname=self._h_defname, _req_fail=self._h_req_fail, _ens_fail=self._h_ens_fail,
                   _eff=self._h_eff, _trytop=self._h_trytop, _regtest=self._h_regtest, _import=self._h_import)
         self._reset_fuel()
@@ -1038,7 +1231,7 @@ class PyInterp(Interp):
             return Interp.apply(self, f, args, node)
         t = type(f)
         if t is FT:
-            if f.__code__.co_argcount != len(args):
+            if f.__code__.co_argcount != len(args) and not _arity_ok(f.__code__, len(args)):
                 raise self._arity_err(f, len(args), node)
             r = f(*args)
             return _tc(r) if type(r) is tuple else r
@@ -1056,6 +1249,9 @@ class PyInterp(Interp):
         meta = CODEMETA.get(f.__code__)
         params = meta.params if meta else []
         name = getattr(f, "__lname__", None)
+        if meta is not None and meta.disp != " ".join(params):
+            return E("E_ARITY", "%s takes %s args [%s], got %d" % (
+                name or "fn", arity_text(meta.lo, meta.hi), meta.disp, nargs), node)
         return E("E_ARITY", "%s takes %d args [%s], got %d" % (name or "fn", len(params), " ".join(params), nargs), node)
 
     # ---- runtime helpers referenced by generated code ----
@@ -1223,7 +1419,7 @@ class PyInterp(Interp):
         depth, f = 0, sys._getframe()
         while f is not None:
             depth, f = depth + 1, f.f_back
-        sys.setrecursionlimit(depth + MAXDEPTH + 25)
+        sys.setrecursionlimit(depth + MAXDEPTH * (1 + self.gen.maxhl) + 25)
         try:
             return fn()
         except BaseException as ex:  # noqa: BLE001
@@ -1436,7 +1632,7 @@ class PyInterp(Interp):
             return LageError("E_RUNTIME", "%s: %s" % (type(ex).__name__, ex))
         nargs = len(node) - 1 if isinstance(node, Form) else (len(args) if args else 0)
         if type(callee) is FT:
-            if isinstance(ex, TypeError) and direct and callee.__code__.co_argcount != nargs:
+            if isinstance(ex, TypeError) and direct and not _arity_ok(callee.__code__, nargs):
                 return self._arity_err(callee, nargs, node)
             return LageError("E_RUNTIME", "%s: %s" % (type(ex).__name__, ex))
         if isinstance(callee, Builtin):

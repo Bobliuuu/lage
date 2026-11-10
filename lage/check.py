@@ -7,8 +7,8 @@ import difflib
 import inspect
 import os
 
-from .core import (Form, Interp, Kw, LageError, Map, STD_DIR, Sym, Vec, display_path, parse_program,
-                   resolve_import)
+from .core import (Form, Interp, Kw, LageError, Map, STD_DIR, Sym, Vec, arity_of, arity_text, display_path,
+                   param_names, parse_params, parse_program, params_disp, resolve_import)
 from .types import typecheck
 
 SPECIAL = ("def", "defn", "fn", "if", "let", "do", "and", "or", "cond", "match", "?", "test", "import")
@@ -187,7 +187,9 @@ class Checker:
                         eff += tuple(s.name for s in c[1:] if isinstance(s, Sym))
                 else:
                     break
-        return {"kind": "fn", "arity": len(params), "effects": eff if named else None}
+        req, opts, rst = _params(params)
+        return {"kind": "fn", "arity": arity_of(req, opts, rst), "disp": params_disp(req, opts, rst),
+                "var": bool(opts or rst), "effects": eff if named else None}
 
     # ---- expression walk ----
     def visible(self, name, scope, ctx):
@@ -241,8 +243,10 @@ class Checker:
                 self.need(ctx, b.effect, "builtin " + name, x)
             return
         if info and info["kind"] == "fn":
-            if n != info["arity"]:
-                self.diag(ctx.mod, "E_ARITY", "%s takes %d args, got %d" % (name, info["arity"], n), x)
+            lo, hi = info["arity"]
+            if n < lo or (hi is not None and n > hi):
+                self.diag(ctx.mod, "E_ARITY", "%s takes %s args%s, got %d" % (
+                    name, arity_text(lo, hi), " [%s]" % info["disp"] if info["var"] else "", n), x)
             for eff in info["effects"] or ():
                 self.need(ctx, eff, "fn " + name, x)
 
@@ -261,7 +265,8 @@ class Checker:
             named = h == "defn"
             params = x[2] if named else x[1]
             rest = list(x[3:] if named else x[2:])
-            sc = set(scope) | {p.name for p in params}
+            preq, popt, prest = _params(params)
+            sc = set(scope) | set(preq) | {n for n, _ in popt} | ({prest} if prest else set())
             if named:
                 sc.add(x[1].name)
             effects, ens, req, body = (), [], [], rest
@@ -284,6 +289,12 @@ class Checker:
                          x[1].name if named else ctx.fname)
             if named:
                 inner.top = ctx.top
+            dsc = set(scope) | set(preq)
+            if named:
+                dsc.add(x[1].name)
+            for n, d in popt:  # a default sees only the params before it
+                self.walk(d, dsc, inner)
+                dsc.add(n)
             for r in req:
                 self.walk(r, sc, inner)
             for r in ens:
@@ -317,6 +328,14 @@ class Checker:
             return
         for e in x[1:]:
             self.walk(e, scope, ctx)
+
+
+def _params(params):
+    """parse_params, but never raises (malformed vectors are reported by the syntax pass)"""
+    try:
+        return parse_params(params, None)
+    except LageError:
+        return param_names(params), [], None
 
 
 class _Pos:

@@ -3,15 +3,17 @@ REF = r'''lage 0.3 reference (everything an agent needs; ~1 screen)
 SYNTAX   (f a b) call | [a b] list | {:k v} map | "str" | 12 3.5 | true false nil | :kw
          ; comment (top level only if you use `lage fmt`)
 TRUTHY   only nil and false are falsy (0 and "" are truthy)
-FORMS    (def x e)  (defn name [params] "doc"? (effects e..)? (sig [T..] R)? (requires c..)? (ensures c..)? body..)
-         (fn [p..] body..)  (if c a b?)  (cond c1 e1 c2 e2 :else e)  (let [x 1 y 2] body..)
+FORMS    (def x e)  (defn name [params] "doc"? (effects e..)? (sig [T.. & T]? R)? (requires c..)? (ensures c..)? body..)
+         (fn [p..] body..)  params: a | (b 10) optional, default evaluated per call, may use earlier params | & more
+         (rest list, last; optional params go before &; arity error says "f takes 2-3 args [a b?]" / "2+")
+         (if c a b?)  (cond c1 e1 c2 e2 :else e)  (let [x 1 y 2] body..)
          (do ..) (and ..) (or ..)  (match r (ok v) body (err e) body)  (? r)  (test "name" expr..)
 RESULTS  no exceptions. fallible builtins return (ok v) / (err e). (? r) unwraps or returns the
          err from the enclosing fn. ok err ok? err? val unwrap-or
 CONTRACT (requires c) checked on entry; (ensures c) on exit with `result` bound. Failure = E_REQUIRES/E_ENSURES.
 EFFECTS  fs.read fs.write net time. A fn must declare (effects ..) to use or call them AND the run must
          grant them: `lage run f.lg --allow fs.read` (prefix grants all: --allow fs, or --allow '*').
-TYPES    optional, gradual, static only: (defn f [a b] (sig [int (list str)] (result int str)) ..). Types: any int
+TYPES    optional, gradual, static only: (defn f [a b] (sig [int (list str)] (result int str)) ..); variadic: (sig [int & str] int). Types: any int
          float num str bool nil (list T) (map T) (result T E) (fn [T..] R) (or T U) (opt T); a lowercase unknown
          name is a type variable bound per call, e.g. (sig [(list t) t] t). Unannotated code is never an error
          source. Caught by `lage check`: bad arg/return types, nil leaking into int, ? in a non-result fn, match
@@ -22,8 +24,9 @@ MODULES  (import "lib/m.lg" :as m) then (m/name ..). Paths are relative to the i
 TAILS    calls in tail position (last expr of fn/if/cond/let/do/match/and/or) run in constant depth; a fn
          with (ensures ..) is the exception. Non-tail recursion is capped at 2500 frames.
 BACKEND  default `py` transpiles to Python (fast); `interp` is the reference closure interpreter (env LAGE_BACKEND
-         too). Same results; differences: fuel counts user-fn calls only, effects are lexical, forms nested
-         >~100 deep raise E_INTERNAL (use --backend interp).
+         too). Same results; differences: fuel counts user-fn calls only, effects are lexical. Deeply nested forms
+         (any realistic depth: 1000s of nested calls/ifs/lists, 100s of cond clauses) are hoisted into helper
+         functions automatically; only fns nested >~90 deep inside fns raise E_INTERNAL (use --backend interp).
 TESTS    (test "n" (= a b)) never run by `lage run`; `lage test f.lg` runs them and reports left/right.
 BUILTINS + - * / mod = != < > <= >= not | len first rest last cons append nth get assoc dissoc keys vals
          has? contains? range map filter reduce sort(xs key?) reverse concat sum min max

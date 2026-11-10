@@ -9,7 +9,7 @@ Types: any int float num str bool nil | (list T) (map T) (result T E) (fn [T..] 
 `any` and unannotated code are never an error source (gradual). Sigs are checked statically only.
 Optimistic where idiomatic: `first`/`nth`/`get` return the element type, not (or T nil).
 """
-from .core import Form, Kw, Map, Sym, Vec, parse_program
+from .core import Form, Kw, LageError, Map, Sym, Vec, param_names, parse_params, parse_program
 
 ANY, INT, FLOAT, NUM, STR, BOOL, NIL = (("any",), ("int",), ("float",), ("num",), ("str",), ("bool",), ("nil",))
 BASES = {"any": ANY, "int": INT, "float": FLOAT, "num": NUM, "str": STR, "bool": BOOL, "nil": NIL}
@@ -26,8 +26,10 @@ def show_type(t):
     if k == "result":
         return "(result %s %s)" % (show_type(t[1]), show_type(t[2]))
     if k == "fn":
-        s = "(fn [%s] %s)" % (" ".join(show_type(p) for p in t[1]), show_type(t[2]))
-        return s
+        ps = [show_type(p) for p in t[1]]
+        if len(t) > 3 and t[3] is not None:
+            ps += ["&", show_type(t[3])]
+        return "(fn [%s] %s)" % (" ".join(ps), show_type(t[2]))
     if k == "or":
         return "(or %s)" % " ".join(show_type(m) for m in t[1])
     return str(t)
@@ -71,10 +73,23 @@ def _src(x):
 
 
 def parse_sig(c):
-    """(sig [T..] R) -> ('fn', params, ret, None)"""
+    """(sig [T..] R) / (sig [T.. & T] R) -> ('fn', params, ret, rest type | None)"""
     if len(c) != 3 or not isinstance(c[1], Vec):
         raise TypeSyntax("syntax: (sig [param-types] return-type)", c)
-    return ("fn", tuple(parse_type(p) for p in c[1]), parse_type(c[2]), None)
+    ps, rest = list(c[1]), None
+    for i, p in enumerate(ps):
+        if isinstance(p, Sym) and p.name == "&":
+            if i != len(ps) - 2:
+                raise TypeSyntax("& in a sig must be followed by exactly one type, e.g. (sig [int & str] int)", c)
+            rest = parse_type(ps[-1])
+            ps = ps[:i]
+            break
+    return ("fn", tuple(parse_type(p) for p in ps), parse_type(c[2]), rest)
+
+
+def fn_lo(t):
+    """minimum arg count of a fn type (a 5th slot, set for fns with optional params)"""
+    return t[4] if len(t) > 4 else len(t[1])
 
 
 def _fn(src):
@@ -156,9 +171,18 @@ def compat(e, a, s):
     if ek == "result":
         return ak == "result" and compat(e[1], a[1], s) and compat(e[2], a[2], s)
     if ek == "fn":
-        if ak != "fn" or len(e[1]) != len(a[1]):
+        if ak != "fn":
             return False
-        if not all(compat(ap, ep, s) for ap, ep in zip(a[1], e[1])):
+        if len(e[1]) != len(a[1]) or e[3] is not None or a[3] is not None or fn_lo(a) != len(a[1]):
+            ne = len(e[1])  # variadic / optional: the actual fn must accept exactly the expected arg count
+            if e[3] is not None and a[3] is None:
+                return False
+            if not (fn_lo(a) <= ne and (ne <= len(a[1]) or a[3] is not None)):
+                return False
+            ps = [a[1][i] if i < len(a[1]) else a[3] for i in range(ne)]
+        else:
+            ps = a[1]
+        if not all(compat(ap, ep, s) for ap, ep in zip(ps, e[1])):
             return False
         return compat(e[2], a[2], s)
     return False
@@ -174,7 +198,7 @@ def subst(t, s):
     if k == "result":
         return ("result", subst(t[1], s), subst(t[2], s))
     if k == "fn":
-        return ("fn", tuple(subst(p, s) for p in t[1]), subst(t[2], s), t[3])
+        return ("fn", tuple(subst(p, s) for p in t[1]), subst(t[2], s), t[3] and subst(t[3], s)) + t[4:]
     if k == "or":
         return ("or", tuple(subst(m, s) for m in t[1]))
     return t
@@ -190,7 +214,7 @@ def skolem(t):
     if k == "result":
         return ("result", skolem(t[1]), skolem(t[2]))
     if k == "fn":
-        return ("fn", tuple(skolem(p) for p in t[1]), skolem(t[2]), t[3])
+        return ("fn", tuple(skolem(p) for p in t[1]), skolem(t[2]), t[3] and skolem(t[3])) + t[4:]
     if k == "or":
         return ("or", tuple(skolem(m) for m in t[1]))
     return t
@@ -242,7 +266,12 @@ class TypeChecker:
 
     def declared(self, f, report=True):
         """Declared fn type of a defn form (from its sig), or any-typed with correct arity."""
-        n = len(f[2])
+        try:
+            preq, popt, prest = parse_params(f[2], f)
+        except LageError:
+            preq, popt, prest = param_names(f[2]), [], None
+        n = len(preq) + len(popt)
+        dflt = ("fn", (ANY,) * n, ANY, ANY if prest else None) + ((len(preq),) if popt else ())
         for c in f[3:]:
             if isinstance(c, Form) and c and isinstance(c[0], Sym) and c[0].name == "sig":
                 try:
@@ -252,12 +281,15 @@ class TypeChecker:
                         self.diag("E_SIG", str(e), e.node if hasattr(e.node, "line") else c,
                                   "types: any int float num str bool nil (list T) (map T) (result T E) (fn [T] R) (or T U) (opt T)")
                     break
-                if len(t[1]) != n:
+                if len(t[1]) != n or (t[3] is None) != (prest is None):
                     if report:
-                        self.diag("E_SIG", "sig lists %d param types but fn %s takes %d" % (len(t[1]), f[1].name, n), c)
+                        self.diag("E_SIG", "sig lists %d param types%s but fn %s takes %d%s" % (
+                            len(t[1]), " + & rest" if t[3] is not None else "", f[1].name, n,
+                            " + & rest" if prest else ""), c,
+                                  "list the rest element type after &: (sig [int & str] int)" if prest else None)
                     break
-                return t
-        return ("fn", (ANY,) * n, ANY, None)
+                return t + ((len(preq),) if popt else ())
+        return dflt
 
     # ---- inference ----
     def infer(self, x, env, ret, top=False):
@@ -389,13 +421,20 @@ class TypeChecker:
             return ANY
         e = dict(env)
         ps = []
-        for i, p in enumerate(x[1]):
-            if isinstance(p, Sym):
-                t = expect[i] if expect is not None and i < len(expect) else ANY
-                e[p.name] = t
-                ps.append(t)
+        try:
+            preq, popt, prest = parse_params(x[1], x)
+        except LageError:
+            return ANY
+        for i, n in enumerate(preq + [n for n, _ in popt]):
+            t = expect[i] if expect is not None and i < len(expect) else ANY
+            e[n] = t
+            ps.append(t)
+        for n, d in popt:
+            self.infer(d, e, ret)
+        if prest:
+            e[prest] = ("list", ANY)
         rt = self.body(x[2:], e, ret)
-        return ("fn", tuple(ps), rt, None)
+        return ("fn", tuple(ps), rt, ANY if prest else None) + ((len(preq),) if popt else ())
 
     def s_defn(self, x, env, ret, top):
         if len(x) < 4 or not isinstance(x[1], Sym) or not isinstance(x[2], Vec):
@@ -406,9 +445,19 @@ class TypeChecker:
         env[x[1].name] = t
         sk = skolem(t)
         e = dict(env)
-        for p, pt in zip(x[2], sk[1]):
-            if isinstance(p, Sym):
-                e[p.name] = pt
+        try:
+            preq, popt, prest = parse_params(x[2], x)
+        except LageError:
+            return t
+        for n, pt in zip(preq + [n for n, _ in popt], sk[1]):
+            e[n] = pt
+        if prest:
+            e[prest] = ("list", sk[3] if sk[3] is not None else ANY)
+        for (n, d), pt in zip(popt, sk[1][len(preq):]):
+            dt = self.infer(d, e, sk[2])
+            if not compat(pt, dt, {}):
+                self.diag("E_TYPE_MISMATCH", "default of %s is %s but its param type is %s" % (
+                    n, show_type(dt), show_type(pt)), d if hasattr(d, "line") and d.line else x)
         body = list(x[3:])
         if len(body) > 1 and isinstance(body[0], str):
             body = body[1:]
@@ -449,11 +498,11 @@ class TypeChecker:
             return ANY
         params, rtype, rest = ft[1], ft[2], ft[3] if len(ft) > 3 else None
         n = len(args)
-        if n < len(params) or (n > len(params) and rest is None):
+        if n < fn_lo(ft) or (n > len(params) and rest is None):
             for a in args:
                 self.infer(a, env, ret)
             return subst(rtype, {})  # arity is reported by the scope checker
-        expected = list(params) + [rest] * (n - len(params))
+        expected = [params[i] if i < len(params) else rest for i in range(n)]
         s, at = {}, [None] * n
         # pass 1: args not expected to be functions bind the type variables; pass 2: function-typed
         # args (lambdas and named fns) are then checked against the bound element types

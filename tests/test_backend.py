@@ -229,6 +229,62 @@ CORPUS = [
     ("recursive-list", "(defn build [n] (if (= n 0) [] (cons n (build (- n 1))))) (build 100)", {}),
     ("ackermann", "(defn ack [m n] (cond (= m 0) (+ n 1) (= n 0) (ack (- m 1) 1) :else (ack (- m 1) (ack m (- n 1))))) (ack 2 3)", {}),
     ("collatz", "(defn steps [n acc] (cond (= n 1) acc (= (mod n 2) 0) (steps (/ n 2) (+ acc 1)) :else (steps (+ (* 3 n) 1) (+ acc 1)))) (steps 27 0)", {}),
+    # ---- variadic and optional params ----
+    ("rest-basic", "(defn f [a b & more] [a b more]) [(f 1 2) (f 1 2 3) (f 1 2 3 4)]", {}),
+    ("rest-lambda", "((fn [x & xs] [x xs]) 1 2 3)", {}),
+    ("rest-only", "(defn f [& xs] (len xs)) [(f) (f 1) (f 1 2 3)]", {}),
+    ("rest-arity-few", "(defn f [a b & m] a) (f 1)", {}),
+    ("rest-arity-lambda", "((fn [a b & m] a) 1)", {}),
+    ("opt-basic", "(defn g [a (b 10) (c (+ a b))] [a b c]) [(g 1) (g 1 2) (g 1 2 3)]", {}),
+    ("opt-arity-many", "(defn g [a (b 1)] a) (g 1 2 3)", {}),
+    ("opt-arity-none", "(defn g [a (b 1) (c 2)] a) (g)", {}),
+    ("opt-nil-explicit", "(defn k [(a 5)] a) [(k) (k nil) (k false)]", {}),
+    ("opt-rest", "(defn h [a (b 1) & r] [a b r]) [(h 0) (h 0 5) (h 0 5 6 7)]", {}),
+    ("opt-default-later-param", "(def b 99) (defn g [(a b) (b 1)] [a b]) (g)", {}),
+    ("opt-default-unbound", "(defn g [(a zz)] a) (g)", {}),
+    ("opt-default-error-line", "(defn g [a\n (b (nth [] 3))] b)\n(g 1)", {}),
+    ("opt-default-closure", "(defn m [(a 1) (b (fn [] a))] (b)) [(m) (m 7)]", {}),
+    ("opt-default-call", "(defn d [] 4) (defn g [(a (d))] a) (g)", {}),
+    ("var-closure-capture", "(defn mk [a & r] (fn [] [a r])) (let [f (mk 1 2 3) g (mk 9)] [(f) (g)])", {}),
+    ("var-closure-opt", "(defn mk [(a 1)] (fn [x] (+ a x))) [((mk) 1) ((mk 10) 1)]", {}),
+    ("var-tail-self", "(defn f [n & acc] (if (= n 0) (len acc) (f (- n 1) 1))) (f 30000)", {}),
+    ("var-tail-opt-self", "(defn f [n (acc 0)] (if (= n 0) acc (f (- n 1) (+ acc n)))) (f 30000)", {}),
+    ("var-tail-mutual",
+     "(defn a [n & r] (if (= n 0) :a (b (- n 1) 1))) (defn b [n (x 0)] (a n x)) (a 20000)", {}),
+    ("var-tail-arity-err", "(defn g [a & r] a) (defn f [] (g)) (f)", {}),
+    ("var-nontail-arity-err", "(defn g [a (b 1)] a) (defn f [] (+ 1 (g 1 2 3))) (f)", {}),
+    ("var-requires", "(defn f [a (b 0)] (requires (> b 0)) a) (f 1)", {}),
+    ("var-requires-ok", "(defn f [a (b 1) & r] (requires (> b 0)) [a b r]) (f 1 2 3)", {}),
+    ("var-ensures", "(defn f [a & r] (ensures (= result (len r))) (len r)) [(f 1) (f 1 2 3)]", {}),
+    ("var-ensures-fail", "(defn f [a (b 1)] (ensures (> result 10)) (+ a b)) (f 1)", {}),
+    ("var-effects", '(defn f [(p "/nonexistent/z")] (effects fs.read) (read-file p)) (f)', {"allow": ["fs.read"]}),
+    ("var-effects-denied", '(defn f [(p "/nonexistent/z")] (effects fs.read) (read-file p)) (f)', {}),
+    ("var-effects-default",
+     '(defn f [(p (read-file "/nonexistent/q"))] (effects fs.read) p) (f)', {"allow": ["fs.read"]}),
+    ("var-effects-undeclared", '(defn f [(p (read-file "/nonexistent/q"))] p) (f)', {"allow": ["fs.read"]}),
+    ("var-callbacks", "(map (fn [x (y 10)] (+ x y)) [1 2])", {}),
+    ("var-callbacks-rest", "(map (fn [x & r] [x r]) [1 2])", {}),
+    ("var-callbacks-rest-only", "(map (fn [& r] r) [1 2])", {}),
+    ("var-reduce-opt", "(reduce (fn [a x (k 2)] (+ a (* x k))) 0 [1 2 3])", {}),
+    ("var-reduce-rest", "(reduce (fn [a x & r] (+ a x (len r))) 0 [1 2 3])", {}),
+    ("var-callback-arity", "(map (fn [a b & r] a) [1 2])", {}),
+    ("var-filter", "(filter (fn [x (m 2)] (= (mod x m) 0)) (range 7))", {}),
+    ("var-sort-key", "(sort [3 1 2] (fn [x (s 0)] (- s x)))", {}),
+    ("var-show", "(defn f [a & r] a) (def g (fn [(x 1)] x)) [f g]", {}),
+    ("var-local-rec", "(let [f (fn [n & r] (if (= n 0) (len r) (f (- n 1) 1)))] (f 5))", {}),
+    ("var-nested-defn", "(defn outer [x] (defn inner [y (z 2)] (* y z)) [(inner x) (inner x 3)]) (outer 4)", {}),
+    ("var-shadow-builtin", "(defn f [len & r] (len 1 2)) (f (fn [a b] (+ a b)))", {}),
+    ("var-shadow-rest-name", "(defn f [& map] (len map)) (f 1 2 3)", {}),
+    ("var-apply-via-value", "(defn f [a & r] [a r]) (let [g f] (g 1 2))", {}),
+    ("var-stack", "(defn a [x (y 1)] (nth [1] x)) (defn b [x] (+ 1 (a x))) (b 9)", {}),
+    ("var-fuel", "(defn f [x & r] (+ 1 (f x))) (f 1)", {"fuel": 300}),
+    ("var-depth", "(defn f [n (k 1)] (+ k (f n))) (f 1)", {}),
+    ("var-syntax-dup", "(defn f [a a] 1)", {}),
+    ("var-syntax-amp", "(defn f [a & b c] 1)", {}),
+    ("var-syntax-opt-after-rest", "(defn f [a & b (c 1)] 1)", {}),
+    ("var-syntax-req-after-opt", "(defn f [(a 1) b] 1)", {}),
+    ("var-syntax-bad-item", "(print 1) (fn [a (b 1 2)] 1)", {}),
+    ("var-syntax-try-default", "(defn f [(a (? 1))] a)", {}),
 ]
 
 
@@ -265,6 +321,108 @@ def _mk(name, src, kw):
 
 for _n, _s, _k in CORPUS:
     setattr(Differential, "test_" + _n.replace("-", "_"), _mk(_n, _s, _k))
+
+
+def nest(n, pre, post, inner):
+    return pre * n + inner + post * n
+
+
+def cond_clauses(n, val="%d"):
+    return " ".join("(= %d c) " % i + val % i for i in range(n))
+
+
+# generated programs far past python's 200-bracket / 100-indent limits: the transpiler hoists deep
+# sub-expressions into helper functions, so both backends must still agree (and never E_INTERNAL)
+DEEP = [
+    ("plus-400", nest(400, "(+ 1 ", ")", "0"), "400"),
+    ("do-400", nest(400, "(do 1 ", ")", "7"), "7"),
+    ("if-300", "(def c false) " + nest(300, "(if c 1 ", ")", "5"), "5"),
+    ("if-then-300", "(def c true) " + nest(300, "(if c ", " 2)", "5"), "5"),
+    ("cond-300-expr", "(def c 250) (+ 1 (cond %s :else 99))" % cond_clauses(300), "251"),
+    ("cond-300-none", "(def c -1) (cond %s)" % cond_clauses(300), "nil"),
+    ("list-500", "[" + " ".join("[%d [%d]]" % (i, i) for i in range(500)) + "]", None),
+    ("list-nested-400", nest(400, "[1 ", "]", "2"), None),
+    ("map-nested-300", nest(300, "{:a ", "}", "1"), None),
+    ("let-400", nest(400, "(let [x 1] (+ x ", "))", "0"), "400"),
+    ("and-or-300", "(def c true) " + nest(300, "(and c (or false ", "))", "3"), "3"),
+    ("and-flat-300", "(and " + " ".join(["true"] * 300) + " 5)", "5"),
+    ("or-flat-300", "(or " + " ".join(["nil"] * 300) + " 5)", "5"),
+    ("match-expr-300", "(+ 1 " + nest(300, "(match (ok 1) (ok v) (+ v ", ") (err e) 0)", "0") + ")", "301"),
+    ("fn-plus-400", "(defn f [x] %s) (f 2)" % nest(400, "(+ x ", ")", "1"), "801"),
+    ("fn-if-then-400", "(defn f [x] %s) (f 2)" % nest(400, "(if (> x 0) ", " 0)", "1"), "1"),
+    ("fn-loop-tail-300",
+     "(defn f [x acc] %s) (f 2 0)" % nest(300, "(if (> x 0) ", " (f (- x 1) (+ acc 1)))", "acc"), "0"),
+    ("fn-tail-recursion-deep-if",
+     "(defn f [n acc] %s) (f 3000 0)" % nest(300, "(if (> n 0) ", " 0)", "(if (= n 1) acc (f (- n 1) (+ acc 1)))"),
+     "2999"),
+    ("fn-match-tail-300", "(defn f [x] %s) (f 2)" % nest(300, "(match (ok 1) (ok v) ", " (err e) e)", "5"), "5"),
+    ("fn-tail-cond-300", "(defn g [y] (+ y 1)) (defn f [c] (cond %s :else 0)) (f 250)" % cond_clauses(300, "(g %d)"),
+     "251"),
+    ("closure-capture-deep", "(defn f [x] %s) ((f 2))" % nest(60, "(let [y x] (fn [] (+ 0 ", ")))", "y"), None),
+    ("def-in-deep-do", "(defn f [x] %s) (f 2)" % nest(300, "(do (def z 3) (+ z ", "))", "z"), "903"),
+    ("try-deep", "(defn f [r] %s) [(f (ok 1)) (f (err 2))]" % nest(300, "(+ 1 ", ")", "(? r)"), "[301 (err 2)]"),
+    ("contracts-deep",
+     "(defn f [x] (requires (> x 0)) (ensures (> result 0)) %s) [(f 1) (f 0)]" % nest(300, "(+ 1 ", ")", "x"), None),
+    ("string-parens", nest(200, '(str "((" ', ' "))")', '")("'), None),
+    ("wide-and-deep", "(+ " + " ".join(nest(40, "(+ 1 ", ")", "1") for _ in range(100)) + ")", "4100"),
+    ("rest-and-deep", "(defn f [a & r] %s) (f 1 2 3)" % nest(300, "(+ 1 ", ")", "(len r)"), "302"),
+    ("opt-default-deep", "(defn f [(a %s)] a) [(f) (f 1)]" % nest(300, "(+ 1 ", ")", "0"), "[300 1]"),
+    ("top-level-many-forms-deep", " ".join(nest(150, "(+ 1 ", ")", "%d" % i) for i in range(20)), "169"),
+    # errors inside hoisted code keep their position, message and stack
+    ("err-deep-bottom", "(defn f [x] %s) (defn g [x] (+ 1 (f x))) (g 5)" % nest(300, "(+ 1 ", ")", "(nth [1] x)"), None),
+    ("err-deep-top", nest(300, "(+ 1 ", ")", "(nth [1] 5)"), None),
+    ("err-deep-multiline", "(print 1)\n" + nest(300, "(+ 1\n ", ")", "(nth [1] 5)"), None),
+    ("err-deep-unbound", "(defn f [x] %s) (f 5)" % nest(300, "(+ 1 ", ")", "yy"), None),
+    ("err-deep-type", nest(300, "(+ 1 ", ")", '"a"'), None),
+    ("err-deep-try-top", nest(300, "(+ 1 ", ")", '(? (err 1))'), None),
+    ("err-deep-requires", "(defn f [x] (requires (> x 0)) %s) (f 0)" % nest(300, "(+ 1 ", ")", "x"), None),
+    ("err-deep-ensures", "(defn f [x] (ensures (< result 0)) %s) (f 1)" % nest(300, "(+ 1 ", ")", "x"), None),
+    ("err-deep-effect", "(defn f [] %s) (f)" % nest(300, "(do 1 ", ")", '(read-file "/nonexistent/z")'), None),
+    ("err-deep-arity", "(defn g [a] a) (defn f [] %s) (f)" % nest(300, "(do 1 ", ")", "(g 1 2)"), None),
+    ("err-deep-recursion-depth", "(defn f [n] %s) (f 1)" % nest(40, "(+ 1 ", ")", "(f n)"), None),
+    ("deep-recursion-ok", "(defn f [n] (if (= n 0) 0 %s)) (f 2000)" % nest(40, "(+ 1 ", ")", "(f (- n 1))"), "80000"),
+]
+
+
+class DeepNesting(unittest.TestCase):
+    def check(self, name, src, want):
+        a, b = both(src)
+        if not b["ok"]:
+            self.assertNotEqual(b["error"]["code"], "E_INTERNAL", name)
+        self.assertEqual(a["ok"], b["ok"], "%s\nref=%r\npy=%r" % (name, a, b))
+        self.assertEqual(a["stdout"], b["stdout"], name)
+        self.assertEqual(a["effects"], b["effects"], name)
+        if a["ok"]:
+            self.assertEqual(a["value"], b["value"], name)
+            self.assertEqual(a["json"], b["json"], name)
+            if want is not None:
+                self.assertEqual(b["value"], want, name)
+        else:
+            for k in ("code", "line", "col", "message", "hint", "stack", "source"):
+                self.assertEqual(a["error"].get(k), b["error"].get(k), "%s: %s" % (name, k))
+
+    def test_corpus_size(self):
+        self.assertGreaterEqual(len(DEEP), 40)
+
+    def test_helpers_are_generated(self):
+        it = PyInterp(capture=True)
+        big_stack(lambda: it.run(nest(400, "(+ 1 ", ")", "0")))
+        self.assertGreater(it.gen.maxhl, 0)
+
+    def test_shallow_code_is_not_hoisted(self):
+        it = PyInterp(capture=True)
+        it.run("(defn f [x] (cond (= x 1) 1 (= x 2) 2 :else (+ x (* 2 (+ 1 (if x 1 2)))))) (f 3)")
+        self.assertEqual(it.gen.maxhl, 0)
+
+
+def _mkdeep(name, src, want):
+    def t(self):
+        self.check(name, src, want)
+    return t
+
+
+for _n, _s, _w in DEEP:
+    setattr(DeepNesting, "test_" + _n.replace("-", "_"), _mkdeep(_n, _s, _w))
 
 
 class Modules(unittest.TestCase):
