@@ -66,6 +66,7 @@ reference (`--backend interp`) and the two are differential-tested on 130+ progr
 
 ## Status
 
-v0.3: transpiling backend with tail calls, gradual static types, stdlib (6 modules), modules, whole-program
-static checker, formatter, test runner, 318 tests (run on both backends).
-Not yet: native/bytecode compilation beyond Python, sig-annotated stdlib.
+v0.4: transpiling backend with tail calls and no practical nesting limit, gradual static types,
+a fully type-annotated stdlib (6 modules, 71 functions), rest and optional parameters, modules,
+whole-program static checker, `lage api`, formatter, test runner, 322 tests (run on both backends).
+Not yet: native/bytecode compilation beyond Python, lage `fn`s nested ~100 deep (Python indentation limit).

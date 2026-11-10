@@ -163,6 +163,9 @@ class Types(unittest.TestCase):
         self.assertEqual(codes('(+ 1 "x")'), ["E_TYPE_MISMATCH"])
         self.assertEqual(codes("(reduce (fn [a x] (+ a x)) 0 [1 2 3])"), [])
 
+    def test_variadic_builtin_as_function_value(self):
+        self.assertEqual(codes("(defn g [f xs] (sig [(fn [a] b) (list a)] (list b)) (map f xs)) (g str [1 2])"), [])
+
     def test_try_and_match(self):
         self.assertEqual(codes('(defn f [s] (sig [str] int) (? (parse-int s)))'), ["E_TYPE_MISMATCH"])
         self.assertEqual(codes('(match (parse-int "1") (ok n) (+ n 1) (err e) (+ e 1))'), ["E_TYPE_MISMATCH"])

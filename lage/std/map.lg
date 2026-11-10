@@ -16,7 +16,7 @@
 
 (defn map-vals [f m]
   "apply f to every value"
-  (sig [any (map a)] (map any))
+  (sig [(fn [a] b) (map a)] (map b))
   (reduce (fn [acc k] (assoc acc k (f (get m k)))) {} (keys m)))
 
 (defn filter-vals [f m]
