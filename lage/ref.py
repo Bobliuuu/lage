@@ -33,6 +33,7 @@ BUILTINS + - * / mod = != < > <= >= not | len first rest last cons append nth ge
 COMMANDS lage check FILE|- [--json]   static pass: ALL unbound names, arity, undeclared effects, syntax, imports, types
          lage run FILE|- [--json] [--allow E,..] [--fuel N] [--trace] [--no-check] [--backend py|interp]   (runs `check` first)
          lage test FILE|- [--json]   lage fmt FILE|- [--write|--check]   lage ref
+         lage api FILE|std/NAME [--json]   public fns of a module: params, sig, effects, doc (no need to read source)
 OUTPUT   --json => one JSON object: {ok,value,stdout,steps,effects_used,trace?} or {ok:false,error:{code,
          message,file?,line,col,source,hint,stack}}; check failures add diagnostics:[every error]. Exit 0 ok, 1 runtime/test failure, 2 parse/usage.
 ERRORS   E_PARSE E_SYNTAX E_UNBOUND E_TYPE E_ARITY E_NOT_FN E_INDEX E_DIV E_ASSERT E_REQUIRES E_ENSURES

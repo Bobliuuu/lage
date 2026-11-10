@@ -267,6 +267,15 @@ class Cli(unittest.TestCase):
         self.assertEqual((r.returncode, d["ok"], len(d["diagnostics"])), (1, False, 2))
         self.assertEqual(self.sh("check", "examples/use_lib.lg").returncode, 0)
 
+    def test_api(self):
+        d = json.loads(self.sh("api", "examples/lib/typedlib.lg", "--json").stdout)
+        names = [f["name"] for f in d["functions"]]
+        self.assertEqual(names, ["scale", "parse-scaled"])
+        self.assertEqual(d["functions"][0]["sig"], "[int int] -> int")
+        self.assertEqual(d["functions"][0]["doc"], "multiply x by k")
+        self.assertIn("list", self.sh("api", "std/list").stdout.lower())
+        self.assertEqual(self.sh("api", "nope.lg").returncode, 2)
+
     def test_ref(self):
         self.assertIn("lage 0.3", self.sh("ref").stdout)
 

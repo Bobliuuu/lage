@@ -4,6 +4,7 @@ import os
 import sys
 import threading
 
+from .api import api_of, render, resolve
 from .check import check
 from .core import Interp, LageError, format_source, show, to_json
 from .ref import REF
@@ -120,6 +121,23 @@ def cmd_test(a):
     return 1 if bad else 0
 
 
+def cmd_api(a):
+    try:
+        src = _read(resolve(a.file))
+        fns = api_of(src)
+    except OSError as e:
+        sys.stderr.write("cannot read %s: %s\n" % (a.file, e.strerror))
+        return 2
+    except LageError as e:
+        sys.stderr.write("%s: %s\n" % (e.code, e.message))
+        return 2
+    if a.json:
+        _emit({"ok": True, "module": a.file, "functions": fns})
+    else:
+        print(render(fns))
+    return 0
+
+
 def cmd_fmt(a):
     src = _read(a.file)
     try:
@@ -154,6 +172,10 @@ def main(argv=None):
     s.add_argument("file")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_check)
+    s = sub.add_parser("api")
+    s.add_argument("file", help="path or std/NAME")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_api)
     s = sub.add_parser("fmt")
     s.add_argument("file")
     s.add_argument("--write", action="store_true")
