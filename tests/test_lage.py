@@ -271,5 +271,75 @@ class Cli(unittest.TestCase):
         self.assertIn("lage 0.3", self.sh("ref").stdout)
 
 
+class Params(unittest.TestCase):
+    def test_rest(self):
+        self.assertEqual(run("(defn f [a b & more] [a b more]) [(f 1 2) (f 1 2 3 4)]")[0], [[1, 2, []], [1, 2, [3, 4]]])
+        self.assertEqual(run("((fn [x & xs] [x xs]) 1 2 3)")[0], [1, [2, 3]])
+        self.assertEqual(run("((fn [& xs] (len xs)))")[0], 0)
+
+    def test_optional(self):
+        src = "(defn g [a (b 10) (c (+ a b))] [a b c]) [(g 1) (g 1 2) (g 1 2 3)]"
+        self.assertEqual(run(src)[0], [[1, 10, 11], [1, 2, 3], [1, 2, 3]])
+        self.assertEqual(run("(defn h [a (b 1) & r] [a b r]) [(h 0) (h 0 5) (h 0 5 6 7)]")[0],
+                         [[0, 1, []], [0, 5, []], [0, 5, [6, 7]]])
+        self.assertEqual(run("(defn k [(a nil)] a) [(k) (k 3)]")[0], [None, 3])  # nil passed explicitly is not "missing"
+        self.assertEqual(run("(defn m [(a 1) (b (fn [] a))] (b)) (m 7)")[0], 7)
+
+    def test_arity_messages(self):
+        self.assertEqual(err("(defn f [a b & m] a) (f 1)").message, "f takes 2+ args [a b & m], got 1")
+        self.assertEqual(err("(defn g [a (b 1)] a) (g 1 2 3)").message, "g takes 1-2 args [a b?], got 3")
+        self.assertEqual(err("(defn g [a (b 1) (c 2)] a) (g)").message, "g takes 1-3 args [a b? c?], got 0")
+        self.assertEqual(err("(defn f [a] a) (f)").message, "f takes 1 args [a], got 0")
+
+    def test_syntax_errors(self):
+        for src, frag in [("(defn f [a a] 1)", "duplicate"), ("(defn f [a & b c] 1)", "exactly one"),
+                          ("(defn f [a &] 1)", "exactly one"), ("(defn f [& & b] 1)", "exactly one"),
+                          ("(defn f [(a 1) b] 1)", "after an optional"), ("(defn f [a (b 1 2)] 1)", "parameter must be"),
+                          ("(defn f [a (b (? 1))] 1)", "'?'"), ("(defn f [a & (b 1)] 1)", "exactly one")]:
+            e = err(src)
+            self.assertEqual(e.code, "E_SYNTAX", src)
+            self.assertIn(frag, e.message, src)
+        self.assertIn("before &", err("(defn f [a & b (c 1)] 1)").hint)
+        self.assertIn("before &", err("(defn f [a & (c 1)] 1)").hint)
+
+    def test_contracts_see_defaults(self):
+        self.assertEqual(err("(defn f [a (b 0)] (requires (> b 0)) a) (f 1)").code, "E_REQUIRES")
+        self.assertEqual(run("(defn f [a & r] (ensures (= result (len r))) (len r)) (f 1 2 3)")[0], 2)
+
+    def test_tail_calls_through_variadic(self):
+        src = "(defn f [n & acc] (if (= n 0) (len acc) (f (- n 1) 1))) (f 100000)"
+        self.assertEqual(run(src, fuel=10 ** 9)[0], 1)
+
+    def test_closures_capture_params(self):
+        self.assertEqual(run("(defn mk [a & r] (fn [] [a r])) ((mk 1 2 3))")[0], [1, [2, 3]])
+
+    def test_checker(self):
+        self.assertEqual(codes("(defn f [a b & m] (+ a b)) (f 1 2) (f 1 2 3 4) ((fn [x (y 1)] x) 1)"), [])
+        self.assertEqual(codes("(defn f [a b & m] a) (f 1)"), ["E_ARITY"])
+        self.assertEqual(codes("(defn g [a (b 1)] a) (g 1 2 3)"), ["E_ARITY"])
+        self.assertEqual(codes("(defn g [a (b a)] b) (g 1)"), [])  # default sees earlier params
+        self.assertEqual(codes("(defn g [(a b) (b 1)] a) (g)"), ["E_UNBOUND"])  # but not later ones
+        self.assertEqual(codes("(defn f [a & m] (len m)) (f 1 2)"), [])
+        self.assertEqual(codes("(defn f [a a] 1)"), ["E_SYNTAX"])
+
+    def test_variadic_sigs(self):
+        self.assertEqual(codes('(defn f [a & m] (sig [int & str] int) a) (f 1 "x" "y") (f 1)'), [])
+        self.assertEqual(codes("(defn f [a & m] (sig [int & str] int) a) (f 1 2)"), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes("(defn f [a & m] (sig [int & str] int) (len m))"), [])
+        self.assertEqual(codes("(defn f [a & m] (sig [int & str] int) (+ a m))"), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes("(defn f [a & m] (sig [int] int) a)"), ["E_SIG"])
+        self.assertEqual(codes("(defn f [a] (sig [int & str] int) a)"), ["E_SIG"])
+        self.assertEqual(codes("(defn g [a (b 1)] (sig [int int] int) (+ a b)) (g 1) (g 1 2)"), [])
+        self.assertEqual(codes('(defn g [a (b 1)] (sig [int int] int) a) (g "s")'), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes('(defn g [a (b "s")] (sig [int int] int) a)'), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes("(defn f [a & m] (sig [int & int] int) a) (map f [1 2])"), [])
+
+    def test_fmt_roundtrip(self):
+        s = "(defn f [a (b 10) & more] (+ a b))\n"
+        self.assertEqual(format_source(s), s)
+        s2 = "(fn [x (y [1 2]) & r] x)\n"
+        self.assertEqual(format_source(s2), s2)
+
+
 if __name__ == "__main__":
     unittest.main()

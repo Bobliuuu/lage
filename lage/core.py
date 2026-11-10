@@ -108,9 +108,85 @@ class Res:
 
 
 class Fn:
-    def __init__(self, name, params, body, env, effects, requires, ensures, doc):
+    def __init__(self, name, params, body, env, effects, requires, ensures, doc, var=None):
         self.name, self.params, self.body, self.env = name, params, body, env
         self.effects, self.requires, self.ensures, self.doc = effects, requires, ensures, doc
+        self.var = var  # None for fixed arity, else (lo, hi|None, [(opt name, compiled default)], rest name|None, disp)
+
+
+def _has_try(x):
+    """does `x` contain a `?` form outside nested fns?"""
+    if isinstance(x, Form) and x and isinstance(x[0], Sym):
+        if x[0].name == "?":
+            return True
+        if x[0].name in ("fn", "defn"):
+            return False
+    return isinstance(x, (Form, Vec, Map)) and any(_has_try(e) for e in x)
+
+
+def parse_params(params, node):
+    """Validate a parameter vector. Returns (required names, [(optional name, default expr)], rest name|None).
+    Forms: `a` required, `(b 10)` optional with a default expr, `& more` the rest list (last)."""
+    if not isinstance(params, Vec):
+        raise E("E_SYNTAX", "params must be a vector, e.g. [a b], [a (b 10)] or [a & more]", node)
+    req, opts, rest, seen = [], [], None, set()
+
+    def add(sym):
+        if sym.name in seen:
+            raise E("E_SYNTAX", "duplicate parameter name", sym if sym.line else node)
+        seen.add(sym.name)
+    n, i = len(params), 0
+    while i < n:
+        p = params[i]
+        if isinstance(p, Sym) and p.name == "&":
+            tail = list(params[i + 1:])
+            if len(tail) != 1 or not isinstance(tail[0], Sym) or tail[0].name == "&":
+                raise E("E_SYNTAX", "& must be followed by exactly one parameter name, e.g. [a & more]", node,
+                        "optional (name default) parameters must come before &" if any(
+                            isinstance(t, Form) for t in tail) else None)
+            add(tail[0])
+            rest = tail[0].name
+            break
+        if isinstance(p, Sym):
+            if opts:
+                raise E("E_SYNTAX", "required parameter '%s' after an optional one" % p.name, node,
+                        "put required parameters first: [a b (c 10)]")
+            add(p)
+            req.append(p.name)
+        elif isinstance(p, Form) and len(p) == 2 and isinstance(p[0], Sym) and p[0].name != "&":
+            if _has_try(p[1]):
+                raise E("E_SYNTAX", "'?' is not allowed in a default expression", p[1] if hasattr(p[1], "line") else node,
+                        "unwrap in the body instead")
+            add(p[0])
+            opts.append((p[0].name, p[1]))
+        else:
+            raise E("E_SYNTAX", "a parameter must be a name, (name default) or & rest-name", p if isinstance(p, Form) else node,
+                    "examples: a   (b 10)   & more")
+        i += 1
+    return req, opts, rest
+
+
+def param_names(params):
+    """Lenient: every name bound by a parameter vector (no validation)."""
+    out = []
+    for p in params:
+        if isinstance(p, Sym) and p.name != "&":
+            out.append(p.name)
+        elif isinstance(p, Form) and len(p) == 2 and isinstance(p[0], Sym):
+            out.append(p[0].name)
+    return out
+
+
+def arity_of(req, opts, rest):
+    return len(req), (None if rest else len(req) + len(opts))
+
+
+def arity_text(lo, hi):
+    return str(lo) if lo == hi else ("%d+" % lo if hi is None else "%d-%d" % (lo, hi))
+
+
+def params_disp(req, opts, rest):
+    return " ".join(req + [n + "?" for n, _ in opts] + (["&", rest] if rest else []))
 
 
 class Builtin:
@@ -625,9 +701,14 @@ class Interp:
                 if type(f) is not Fn:
                     raise E("E_NOT_FN", "cannot call %s: %s" % (tname(f), show(f)), node,
                             "first item of a call must be a function")
-                if len(args) != len(f.params):
-                    raise E("E_ARITY", "%s takes %d args [%s], got %d" % (
-                        f.name or "fn", len(f.params), " ".join(f.params), len(args)), node)
+                fv = f.var
+                if fv is None:
+                    if len(args) != len(f.params):
+                        raise E("E_ARITY", "%s takes %d args [%s], got %d" % (
+                            f.name or "fn", len(f.params), " ".join(f.params), len(args)), node)
+                elif len(args) < fv[0] or (fv[1] is not None and len(args) > fv[1]):
+                    raise E("E_ARITY", "%s takes %s args [%s], got %d" % (
+                        f.name or "fn", arity_text(fv[0], fv[1]), fv[4], len(args)), node)
                 named = f.effects is not None
                 if named:
                     for eff in f.effects:
@@ -637,7 +718,11 @@ class Interp:
                     self.frames.append(Frame(f))
                     pushed = True
                 env = Env(f.env)
-                env.v.update(zip(f.params, args))
+                if fv is None:
+                    env.v.update(zip(f.params, args))
+                else:
+                    self.bind_var(f, env, args)
+                    args = [env.v[n] for n in f.params]
                 for rn, rc in f.requires:
                     if not truthy(rc(env)):
                         raise E("E_REQUIRES", "precondition failed in %s: %s" % (f.name, flat(rn)), rn,
@@ -670,13 +755,27 @@ class Interp:
             if pushed:
                 self.frames.pop()
 
+    @staticmethod
+    def bind_var(f, env, args):
+        lo, _, opts, rest, _ = f.var
+        v, n, names = env.v, len(args), f.params
+        for i in range(lo):
+            v[names[i]] = args[i]
+        i = lo
+        for nm, dc in opts:  # defaults run left to right in the fn's scope, later params still unbound
+            v[nm] = args[i] if i < n else dc(env)
+            i += 1
+        if rest:
+            v[rest] = list(args[i:])
+
     # ---- special forms (compile-time) ----
     def make_fn(self, name, params, rest, node, named):
-        if not isinstance(params, Vec) or not all(isinstance(p, Sym) for p in params):
-            raise E("E_SYNTAX", "params must be a vector of symbols, e.g. [a b]", node)
-        names = [p.name for p in params]
-        if len(set(names)) != len(names):
-            raise E("E_SYNTAX", "duplicate parameter name", node)
+        req_n, opt_x, rest_n = parse_params(params, node)
+        names = req_n + [n for n, _ in opt_x] + ([rest_n] if rest_n else [])
+        var = None
+        if opt_x or rest_n:
+            lo, hi = arity_of(req_n, opt_x, rest_n)
+            var = (lo, hi, [(n, self.comp(d)) for n, d in opt_x], rest_n, params_disp(req_n, opt_x, rest_n))
         rest, doc, eff, req, ens = list(rest), None, [], [], []
         if named:
             if len(rest) > 1 and isinstance(rest[0], str):
@@ -701,7 +800,7 @@ class Interp:
         reqs = [(r, self.comp(r)) for r in req]
         enss = [(r, self.comp(r)) for r in ens]
         effects = tuple(eff) if named else None
-        return lambda env: Fn(name, names, body, env, effects, reqs, enss, doc)
+        return lambda env: Fn(name, names, body, env, effects, reqs, enss, doc, var)
 
     def c_defn(self, x, tail):
         if len(x) < 4 or not isinstance(x[1], Sym):

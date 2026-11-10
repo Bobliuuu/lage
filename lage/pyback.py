@@ -30,7 +30,8 @@ import types
 from collections import Counter
 
 from .core import (MAXDEPTH, Builtin, EarlyReturn, E, Form, Interp, Kw, LageError, Map, Res, Sym, Vec,
-                   covers, display_path, eq, flat, parse_program, show, tname, to_json, truthy, resolve_import)
+                   covers, display_path, eq, flat, parse_program, show, tname, to_json, truthy, resolve_import,
+                   parse_params, param_names, arity_of, arity_text, params_disp)
 
 FT = types.FunctionType
 _ID = re.compile(r"[A-Za-z_][A-Za-z_0-9]*$")
@@ -60,10 +61,13 @@ HEADINFO = {}     # call node id -> ("b", builtin name) | ("v", python name)
 
 
 class FnMeta:
-    __slots__ = ("name", "params", "effects", "outer")
+    __slots__ = ("name", "params", "effects", "outer", "lo", "hi", "disp")
 
-    def __init__(self, name, params, effects, outer):
+    def __init__(self, name, params, effects, outer, lo=None, hi=-1, disp=None):
         self.name, self.params, self.effects, self.outer = name, params, effects, outer
+        self.lo = len(params) if lo is None else lo
+        self.hi = len(params) if hi == -1 else hi  # None = variadic
+        self.disp = " ".join(params) if disp is None else disp
 
     def ctx(self):
         """The lexically enclosing *named* fn (self if named), or None at top level."""
@@ -73,6 +77,9 @@ class FnMeta:
 class PBuiltin(Builtin):
     def __call__(self, *a):
         return self.fn(*a)
+
+
+_UNSET = object()  # default marker of optional params
 
 
 def _tc(r):
@@ -85,6 +92,13 @@ def _tc(r):
 TC_CODE = _tc.__code__
 
 
+def _arity_ok(code, n):
+    m = CODEMETA.get(code)
+    if m is None:
+        return code.co_argcount == n
+    return m.lo <= n and (m.hi is None or n <= m.hi)
+
+
 # --------------------------------------------------------------------------
 # AST helpers
 # --------------------------------------------------------------------------
@@ -95,6 +109,10 @@ SPECIAL_EX = {"def": "x_def", "defn": "x_defn", "fn": "x_fn", "if": "x_if", "let
               "test": "x_test", "import": "x_import"}
 INLINE = {"+": "+", "-": "-", "*": "*", "<": "<", ">": ">", "<=": "<=", ">=": ">=", "=": "==", "!=": "!="}
 BOOLB = {"<", ">", "<=", ">=", "=", "!=", "not", "has?", "contains?", "ok?", "err?", "starts-with?", "ends-with?"}
+
+
+def simple_params(vec):
+    return all(isinstance(p, Sym) and p.name != "&" for p in vec)
 
 
 def kids(x):
@@ -156,12 +174,12 @@ def scan_binders(x, b):
         if isinstance(h, Sym):
             n = h.name
             if n == "fn" and len(x) > 1 and isinstance(x[1], Vec):
-                b.update(p.name for p in x[1] if isinstance(p, Sym))
+                b.update(param_names(x[1]))
             elif n == "defn" and len(x) > 2:
                 if isinstance(x[1], Sym):
                     b[x[1].name] += 1
                 if isinstance(x[2], Vec):
-                    b.update(p.name for p in x[2] if isinstance(p, Sym))
+                    b.update(param_names(x[2]))
             elif n == "def" and len(x) > 1 and isinstance(x[1], Sym):
                 b[x[1].name] += 1
             elif n == "let" and len(x) > 1 and isinstance(x[1], Vec):
@@ -282,7 +300,7 @@ class Gen:
         for node, _, _ in forms:
             if isinstance(node, Form) and len(node) >= 4 and isinstance(node[0], Sym) and node[0].name == "defn" \
                     and isinstance(node[1], Sym) and isinstance(node[2], Vec) \
-                    and all(isinstance(p, Sym) for p in node[2]) and mod.binders[node[1].name] == 1 \
+                    and simple_params(node[2]) and mod.binders[node[1].name] == 1 \
                     and "defn" in self.it.special:
                 try:
                     _, _, _, ens, body = self.fn_clauses(node[3:], True, node)
@@ -844,15 +862,15 @@ class Gen:
 
     # ---- functions ----
     def make_fn(self, name, params, rest, node, named, sc, self_pid):
-        if not isinstance(params, Vec) or not all(isinstance(p, Sym) for p in params):
-            raise E("E_SYNTAX", "params must be a vector of symbols, e.g. [a b]", node)
-        names = [p.name for p in params]
-        if len(set(names)) != len(names):
-            raise E("E_SYNTAX", "duplicate parameter name", node)
+        req_n, opt_x, rest_n = parse_params(params, node)
+        names = req_n + [n for n, _ in opt_x] + ([rest_n] if rest_n else [])
+        variadic = bool(opt_x or rest_n)
         eff, req, _doc, ens, body = self.fn_clauses(rest, named, node)
         outer, saved_incall = self.fc, self.incall
         self.incall = 0
-        meta = FnMeta(name, names, tuple(eff) if named else None, outer.meta.ctx() if outer else None)
+        lo, hi = arity_of(req_n, opt_x, rest_n)
+        meta = FnMeta(name, names, tuple(eff) if named else None, outer.meta.ctx() if outer else None,
+                      lo, hi, params_disp(req_n, opt_x, rest_n))
         mi = len(METAS)
         METAS.append(meta)
         pyname = "f%d_%s" % (self.uid(), mangle(name or "fn"))
@@ -861,7 +879,7 @@ class Gen:
         pids = [self.declare(fsc, n) for n in names]
         for n in collect_defs(body):
             self.declare(fsc, n)
-        loop = named and self.is_loopable(name, body, ens)
+        loop = named and not variadic and self.is_loopable(name, body, ens)
         try_ = uses_try(body)
         fc = FC(meta)
         fc.loop, fc.self_name, fc.self_pid, fc.params = loop, name if loop else None, self_pid, pids
@@ -888,6 +906,21 @@ class Gen:
                     fc.ind -= 1
             req_lines = self.buf(base, gen_req)
 
+            def gen_defaults():
+                # defaults run left to right; a default sees only the params before it
+                dsc = Scope(sc)
+                for n, pid in zip(req_n, pids):
+                    dsc.vars[n] = pid
+                for (n, d), pid in zip(opt_x, pids[len(req_n):]):
+                    fc.emit("if %s is _U:" % pid)
+                    fc.ind += 1
+                    fc.emit("%s = %s" % (pid, self.ex(d, dsc)))
+                    fc.ind -= 1
+                    dsc.vars[n] = pid
+                if rest_n:
+                    fc.emit("%s = [*%s]" % (pids[-1], pids[-1]))
+            def_lines = self.buf(1, gen_defaults) if variadic else []
+
             def gen_ens():
                 esc = Scope(fsc)
                 fc.emit("%s = _res" % self.declare(esc, "result"))
@@ -899,9 +932,16 @@ class Gen:
             ens_lines = self.buf(1, gen_ens) if ens else []
         finally:
             self.fc, self.incall = outer, saved_incall
-        out = [(0, "def %s(%s):" % (pyname, ", ".join(pids))), (1, "_N()  #@P")]
+        sig = list(pids)
+        if variadic:
+            for i in range(len(req_n), len(req_n) + len(opt_x)):
+                sig[i] += "=_U"
+            if rest_n:
+                sig[-1] = "*" + sig[-1]
+        out = [(0, "def %s(%s):" % (pyname, ", ".join(sig))), (1, "_N()  #@P")]
         if meta.effects:
             out.append((1, "_eff(%d)  #@P" % mi))
+        out += def_lines
         if loop:
             out.append((1, "while True:"))
         out += req_lines
@@ -967,7 +1007,7 @@ class PyInterp(Interp):
         for n, b in self.base.v.items():
             ns["bv_" + mangle(n)] = b
             ns["b_" + mangle(n)] = b.fn
-        ns.update(_tc=_tc, EarlyReturn=EarlyReturn, _try=self._h_try, _mres=self._h_mres, _nomatch=self._h_nomatch,
+        ns.update(_U=_UNSET, _tc=_tc, EarlyReturn=EarlyReturn, _try=self._h_try, _mres=self._h_mres, _nomatch=self._h_nomatch,
                   _mk=self._h_mk, _defname=self._h_defname, _req_fail=self._h_req_fail, _ens_fail=self._h_ens_fail,
                   _eff=self._h_eff, _trytop=self._h_trytop, _regtest=self._h_regtest, _import=self._h_import)
         self._reset_fuel()
@@ -1038,7 +1078,7 @@ class PyInterp(Interp):
             return Interp.apply(self, f, args, node)
         t = type(f)
         if t is FT:
-            if f.__code__.co_argcount != len(args):
+            if f.__code__.co_argcount != len(args) and not _arity_ok(f.__code__, len(args)):
                 raise self._arity_err(f, len(args), node)
             r = f(*args)
             return _tc(r) if type(r) is tuple else r
@@ -1056,6 +1096,9 @@ class PyInterp(Interp):
         meta = CODEMETA.get(f.__code__)
         params = meta.params if meta else []
         name = getattr(f, "__lname__", None)
+        if meta is not None and meta.disp != " ".join(params):
+            return E("E_ARITY", "%s takes %s args [%s], got %d" % (
+                name or "fn", arity_text(meta.lo, meta.hi), meta.disp, nargs), node)
         return E("E_ARITY", "%s takes %d args [%s], got %d" % (name or "fn", len(params), " ".join(params), nargs), node)
 
     # ---- runtime helpers referenced by generated code ----
@@ -1436,7 +1479,7 @@ class PyInterp(Interp):
             return LageError("E_RUNTIME", "%s: %s" % (type(ex).__name__, ex))
         nargs = len(node) - 1 if isinstance(node, Form) else (len(args) if args else 0)
         if type(callee) is FT:
-            if isinstance(ex, TypeError) and direct and callee.__code__.co_argcount != nargs:
+            if isinstance(ex, TypeError) and direct and not _arity_ok(callee.__code__, nargs):
                 return self._arity_err(callee, nargs, node)
             return LageError("E_RUNTIME", "%s: %s" % (type(ex).__name__, ex))
         if isinstance(callee, Builtin):
