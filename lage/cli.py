@@ -146,6 +146,7 @@ def main(argv=None):
         s.add_argument("--allow", default="")
         s.add_argument("--fuel", type=int, default=5_000_000)
         s.add_argument("--no-check", action="store_true", help="skip the static pre-check")
+        s.add_argument("--backend", choices=("py", "interp"), help="evaluator (default: $LAGE_BACKEND or built-in default)")
         if name == "run":
             s.add_argument("--trace", action="store_true")
         s.set_defaults(fn=fn)
@@ -161,6 +162,8 @@ def main(argv=None):
     s = sub.add_parser("ref")
     s.set_defaults(fn=lambda a: print(REF, end="") or 0)
     a = p.parse_args(argv)
+    if getattr(a, "backend", None):
+        os.environ["LAGE_BACKEND"] = a.backend
     sys.setrecursionlimit(200000)
     threading.stack_size(256 * 1024 * 1024)
     box = []
