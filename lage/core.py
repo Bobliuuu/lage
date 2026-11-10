@@ -9,7 +9,9 @@ Design goals (see README):
 """
 import difflib
 import json
+import os
 import re
+import sys
 import urllib.request
 
 MAXDEPTH = 2500
@@ -27,9 +29,14 @@ class LageError(Exception):
         self.col = col
         self.hint = hint
         self.stack = None
+        self.file = None
+        self.src = None
 
     def to_dict(self, src=None):
         d = {"code": self.code, "message": self.message}
+        if self.file:
+            d["file"] = self.file
+            src = self.src
         if self.line:
             d["line"] = self.line
             d["col"] = self.col
@@ -382,32 +389,50 @@ def num(x, who):
     return x
 
 
+class TailCall:
+    __slots__ = ("f", "args", "node")
+
+    def __init__(self, f, args, node):
+        self.f, self.args, self.node = f, args, node
+
+
 class Interp:
-    def __init__(self, allow=(), fuel=5_000_000, trace=False, capture=False):
-        self.glob = Env()
+    def __init__(self, allow=(), fuel=5_000_000, trace=False, capture=False, root=None):
+        self.base = Env()
+        self.glob = Env(self.base)
         self.allow, self.fuel, self.used = set(allow), fuel, 0
         self.frames, self.depth = [], 0
         self.tests, self.out = [], []
         self.tracing, self.trace = trace, []
         self.capture = capture
         self.effects_used = set()
+        self.root = os.path.realpath(root or os.getcwd())
+        self.cur_dir = self.root
+        self.modules, self.loading, self.module_depth = {}, [], 0
         self.special = {
-            "def": self.sf_def, "defn": self.sf_defn, "fn": self.sf_fn, "if": self.sf_if,
-            "let": self.sf_let, "do": self.sf_do, "and": self.sf_and, "or": self.sf_or,
-            "cond": self.sf_cond, "match": self.sf_match, "?": self.sf_try, "test": self.sf_test,
+            "def": self.c_def, "defn": self.c_defn, "fn": self.c_fn, "if": self.c_if,
+            "let": self.c_let, "do": self.c_do, "and": self.c_and, "or": self.c_or,
+            "cond": self.c_cond, "match": self.c_match, "?": self.c_try, "test": self.c_test,
+            "import": self.c_import,
         }
         self._install()
 
     # ---- driver ----
-    def run(self, src):
+    def run_forms(self, forms, env):
         val = None
-        for node, _, _ in parse_program(src)[0]:
+        for node, _, _ in forms:
             try:
-                val = self.eval(node, self.glob)
+                val = self.comp(node)(env)
             except EarlyReturn as er:
                 raise E("E_TRY_TOP", "'?' hit an err at top level: %s" % show(er.val), node,
                         "use '?' only inside a function, or (match ...) at top level")
         return val
+
+    def run(self, src):
+        return self.run_forms(parse_program(src)[0], self.glob)
+
+    def eval(self, x, env):
+        return self.comp(x)(env)
 
     def run_tests(self):
         results = []
@@ -437,50 +462,87 @@ class Interp:
         if self.capture:
             self.out.append(text)
         else:
-            import sys
             sys.stdout.write(text)
 
-    # ---- eval ----
-    def eval(self, x, env):
+    # ---- compiler: AST -> python closures ----
+    def comp(self, x, tail=False):
         if isinstance(x, Sym):
-            try:
-                return env.get(x.name)
-            except KeyError:
-                cands = list(env.names() | set(self.special))
-                m = difflib.get_close_matches(x.name, cands, 3, 0.6)
-                raise E("E_UNBOUND", "unbound symbol '%s'" % x.name, x,
-                        ("did you mean: " + ", ".join(m)) if m else None)
+            return self.c_sym(x)
         if isinstance(x, Form):
+            return self.c_form(x, tail)
+        if isinstance(x, Vec):
+            cs = [self.comp(e) for e in x]
+            return lambda env: [c(env) for c in cs]
+        if isinstance(x, Map):
+            kvs = [(self.comp(k), self.comp(v)) for k, v in zip(x[::2], x[1::2])]
+
+            def mk(env):
+                d = {}
+                for kc, vc in kvs:
+                    k = kc(env)
+                    if not isinstance(k, str):
+                        raise E("E_TYPE", "map key must be keyword or string, got %s" % tname(k), x)
+                    d[k] = vc(env)
+                return d
+            return mk
+        return lambda env, v=x: v
+
+    def c_sym(self, x):
+        name = x.name
+
+        def look(env):
+            e = env
+            while e is not None:
+                v = e.v
+                if name in v:
+                    return v[name]
+                e = e.p
+            cands = list(env.names() | set(self.special))
+            m = difflib.get_close_matches(name, cands, 3, 0.6)
+            raise E("E_UNBOUND", "unbound symbol '%s'" % name, x,
+                    ("did you mean: " + ", ".join(m)) if m else None)
+        return look
+
+    def annotate(self, e, x):
+        if e.line is None:
+            e.line, e.col = getattr(x, "line", None), getattr(x, "col", None)
+        if e.stack is None:
+            e.stack = [fr.fn.name for fr in reversed(self.frames)]
+
+    def c_form(self, x, tail):
+        if not x:
+            raise E("E_SYNTAX", "empty call ()", x, "write nil for nothing, [] for an empty list")
+        h = x[0]
+        if isinstance(h, Sym) and h.name in self.special:
+            return self.special[h.name](x, tail)
+        hc = self.comp(h)
+        acs = [self.comp(a) for a in x[1:]]
+
+        def call(env):
             self.used += 1
             if self.used > self.fuel:
-                raise E("E_FUEL", "fuel exhausted after %d steps" % self.fuel, x,
-                        "possible infinite loop; raise --fuel if intended")
+                e = E("E_FUEL", "fuel exhausted after %d steps" % self.fuel, x,
+                      "possible infinite loop; raise --fuel if intended")
+                self.annotate(e, x)
+                raise e
             try:
-                if not x:
-                    raise E("E_SYNTAX", "empty call ()", x, "write nil for nothing, [] for an empty list")
-                h = x[0]
-                if isinstance(h, Sym) and h.name in self.special:
-                    return self.special[h.name](x, env)
-                f = self.eval(h, env)
-                args = [self.eval(a, env) for a in x[1:]]
+                f = hc(env)
+                args = [c(env) for c in acs]
+                tf = type(f)
+                if tf is Builtin and f.effect is None:
+                    try:
+                        return f.fn(*args)
+                    except (LageError, EarlyReturn):
+                        raise
+                    except Exception as ex:  # noqa: BLE001
+                        raise self.builtin_error(f, args, x, ex)
+                if tail and tf is Fn:
+                    return TailCall(f, args, x)
                 return self.apply(f, args, x)
             except LageError as e:
-                if e.line is None:
-                    e.line, e.col = getattr(x, "line", None), getattr(x, "col", None)
-                if e.stack is None:
-                    e.stack = [fr.fn.name for fr in reversed(self.frames)]
+                self.annotate(e, x)
                 raise
-        if isinstance(x, Vec):
-            return [self.eval(e, env) for e in x]
-        if isinstance(x, Map):
-            d = {}
-            for k, v in zip(x[::2], x[1::2]):
-                kv = self.eval(k, env)
-                if not isinstance(kv, str):
-                    raise E("E_TYPE", "map key must be keyword or string, got %s" % tname(kv), x)
-                d[kv] = self.eval(v, env)
-            return d
-        return x
+        return call
 
     def need(self, eff, who, node):
         if self.frames:
@@ -494,67 +556,80 @@ class Interp:
                     "run with --allow %s" % eff)
         self.effects_used.add(eff)
 
+    def builtin_error(self, f, args, node, ex):
+        if isinstance(ex, RecursionError):
+            return E("E_DEPTH", "recursion too deep", node)
+        if isinstance(ex, TypeError):
+            return E("E_TYPE", "%s: %s" % (f.name, ex), node, "args given: " + " ".join(tname(a) for a in args))
+        return E("E_RUNTIME", "%s: %s" % (f.name, ex), node)
+
     def apply(self, f, args, node=None):
-        if isinstance(f, Builtin):
+        if type(f) is Builtin:
             if f.effect:
                 self.need(f.effect, "builtin " + f.name, node)
             try:
                 return f.fn(*args)
             except (LageError, EarlyReturn):
                 raise
-            except RecursionError:
-                raise E("E_DEPTH", "recursion too deep", node)
-            except TypeError as e:
-                raise E("E_TYPE", "%s: %s" % (f.name, e), node,
-                        "args given: " + " ".join(tname(a) for a in args))
-            except Exception as e:  # noqa: BLE001
-                raise E("E_RUNTIME", "%s: %s" % (f.name, e), node)
-        if not isinstance(f, Fn):
-            raise E("E_NOT_FN", "cannot call %s: %s" % (tname(f), show(f)), node,
-                    "first item of a call must be a function")
-        if len(args) != len(f.params):
-            raise E("E_ARITY", "%s takes %d args [%s], got %d" % (f.name or "fn", len(f.params),
-                                                                " ".join(f.params), len(args)), node)
+            except Exception as ex:  # noqa: BLE001
+                raise self.builtin_error(f, args, node, ex)
         if self.depth >= MAXDEPTH:
             raise E("E_DEPTH", "call depth exceeded %d" % MAXDEPTH, node,
-                    "unbounded recursion? use reduce/map/range instead")
-        named = f.effects is not None
-        if named:
-            for eff in f.effects:
-                self.need(eff, "fn " + f.name, node)
-        env = Env(f.env)
-        env.v.update(zip(f.params, args))
+                    "unbounded non-tail recursion? use a tail call, or reduce/map/range")
         self.depth += 1
-        if named:
-            self.frames.append(Frame(f))
+        pushed, chain = False, []
         try:
-            for r in f.requires:
-                if not truthy(self.eval(r, env)):
-                    raise E("E_REQUIRES", "precondition failed in %s: %s" % (f.name, flat(r)), r,
-                            "called with " + show(dict(zip(f.params, args))))
-            try:
-                res = None
-                for b in f.body:
-                    res = self.eval(b, env)
-            except EarlyReturn as er:
-                res = er.val
-            if f.ensures:
-                env2 = Env(env)
-                env2.v["result"] = res
-                for r in f.ensures:
-                    if not truthy(self.eval(r, env2)):
-                        raise E("E_ENSURES", "postcondition failed in %s: %s" % (f.name, flat(r)), r,
-                                "result was %s; args %s" % (show(res), show(dict(zip(f.params, args)))))
-            if named and self.tracing and len(self.trace) < 2000:
-                self.trace.append({"fn": f.name, "args": to_json(args), "ret": to_json(res)})
-            return res
+            while True:
+                if type(f) is not Fn:
+                    raise E("E_NOT_FN", "cannot call %s: %s" % (tname(f), show(f)), node,
+                            "first item of a call must be a function")
+                if len(args) != len(f.params):
+                    raise E("E_ARITY", "%s takes %d args [%s], got %d" % (
+                        f.name or "fn", len(f.params), " ".join(f.params), len(args)), node)
+                named = f.effects is not None
+                if named:
+                    for eff in f.effects:
+                        self.need(eff, "fn " + f.name, node)
+                    if pushed:
+                        self.frames.pop()
+                    self.frames.append(Frame(f))
+                    pushed = True
+                env = Env(f.env)
+                env.v.update(zip(f.params, args))
+                for rn, rc in f.requires:
+                    if not truthy(rc(env)):
+                        raise E("E_REQUIRES", "precondition failed in %s: %s" % (f.name, flat(rn)), rn,
+                                "called with " + show(dict(zip(f.params, args))))
+                try:
+                    res = None
+                    for b in f.body:
+                        res = b(env)
+                except EarlyReturn as er:
+                    res = er.val
+                if type(res) is TailCall:
+                    if self.tracing:
+                        chain.append((f, args))
+                    f, args, node = res.f, res.args, res.node
+                    continue
+                if f.ensures:
+                    env2 = Env(env)
+                    env2.v["result"] = res
+                    for rn, rc in f.ensures:
+                        if not truthy(rc(env2)):
+                            raise E("E_ENSURES", "postcondition failed in %s: %s" % (f.name, flat(rn)), rn,
+                                    "result was %s; args %s" % (show(res), show(dict(zip(f.params, args)))))
+                if self.tracing:
+                    for cf, ca in chain + [(f, args)]:
+                        if cf.effects is not None and len(self.trace) < 2000:
+                            self.trace.append({"fn": cf.name, "args": to_json(ca), "ret": to_json(res)})
+                return res
         finally:
             self.depth -= 1
-            if named:
+            if pushed:
                 self.frames.pop()
 
-    # ---- special forms ----
-    def make_fn(self, name, params, rest, env, node, named):
+    # ---- special forms (compile-time) ----
+    def make_fn(self, name, params, rest, node, named):
         if not isinstance(params, Vec) or not all(isinstance(p, Sym) for p in params):
             raise E("E_SYNTAX", "params must be a vector of symbols, e.g. [a b]", node)
         names = [p.name for p in params]
@@ -578,127 +653,239 @@ class Interp:
                     ens += c[1:]
         if not rest:
             raise E("E_SYNTAX", "function body is empty", node)
-        return Fn(name, names, rest, env, tuple(eff) if named else None, req, ens, doc)
+        body = [self.comp(b) for b in rest[:-1]] + [self.comp(rest[-1], tail=not ens)]
+        reqs = [(r, self.comp(r)) for r in req]
+        enss = [(r, self.comp(r)) for r in ens]
+        effects = tuple(eff) if named else None
+        return lambda env: Fn(name, names, body, env, effects, reqs, enss, doc)
 
-    def sf_defn(self, x, env):
+    def c_defn(self, x, tail):
         if len(x) < 4 or not isinstance(x[1], Sym):
             raise E("E_SYNTAX", "syntax: (defn name [params] body...)", x, "example: (defn add [a b] (+ a b))")
-        fn = self.make_fn(x[1].name, x[2], x[3:], env, x, True)
-        env.v[x[1].name] = fn
-        return fn
+        mk, name = self.make_fn(x[1].name, x[2], x[3:], x, True), x[1].name
 
-    def sf_fn(self, x, env):
+        def run(env):
+            fn = env.v[name] = mk(env)
+            return fn
+        return run
+
+    def c_fn(self, x, tail):
         if len(x) < 3:
             raise E("E_SYNTAX", "syntax: (fn [params] body...)", x)
-        return self.make_fn(None, x[1], x[2:], env, x, False)
+        return self.make_fn(None, x[1], x[2:], x, False)
 
-    def sf_def(self, x, env):
+    def c_def(self, x, tail):
         if len(x) != 3 or not isinstance(x[1], Sym):
             raise E("E_SYNTAX", "syntax: (def name expr)", x)
-        v = self.eval(x[2], env)
-        if isinstance(v, Fn) and v.name is None:
-            v.name = x[1].name
-        env.v[x[1].name] = v
-        return v
+        name, vc = x[1].name, self.comp(x[2])
 
-    def sf_if(self, x, env):
+        def run(env):
+            v = vc(env)
+            if isinstance(v, Fn) and v.name is None:
+                v.name = name
+            env.v[name] = v
+            return v
+        return run
+
+    def c_if(self, x, tail):
         if len(x) not in (3, 4):
             raise E("E_SYNTAX", "syntax: (if cond then [else])", x, "missing else returns nil")
-        if truthy(self.eval(x[1], env)):
-            return self.eval(x[2], env)
-        return self.eval(x[3], env) if len(x) == 4 else None
+        c, a = self.comp(x[1]), self.comp(x[2], tail)
+        b = self.comp(x[3], tail) if len(x) == 4 else (lambda env: None)
+        return lambda env: a(env) if truthy(c(env)) else b(env)
 
-    def sf_let(self, x, env):
+    def c_let(self, x, tail):
         if len(x) < 3 or not isinstance(x[1], Vec) or len(x[1]) % 2 or \
                 not all(isinstance(s, Sym) for s in x[1][::2]):
             raise E("E_SYNTAX", "syntax: (let [name expr ...] body...)", x)
-        e = Env(env)
-        for s, v in zip(x[1][::2], x[1][1::2]):
-            e.v[s.name] = self.eval(v, e)
-        res = None
-        for b in x[2:]:
-            res = self.eval(b, e)
-        return res
+        binds = [(s.name, self.comp(v)) for s, v in zip(x[1][::2], x[1][1::2])]
+        body = [self.comp(b) for b in x[2:-1]] + [self.comp(x[-1], tail)]
 
-    def sf_do(self, x, env):
-        res = None
-        for b in x[1:]:
-            res = self.eval(b, env)
-        return res
+        def run(env):
+            e = Env(env)
+            for n, c in binds:
+                e.v[n] = c(e)
+            res = None
+            for b in body:
+                res = b(e)
+            return res
+        return run
 
-    def sf_and(self, x, env):
-        v = True
-        for b in x[1:]:
-            v = self.eval(b, env)
-            if not truthy(v):
-                return v
-        return v
+    def c_do(self, x, tail):
+        if len(x) == 1:
+            return lambda env: None
+        body = [self.comp(b) for b in x[1:-1]] + [self.comp(x[-1], tail)]
 
-    def sf_or(self, x, env):
-        v = False
-        for b in x[1:]:
-            v = self.eval(b, env)
-            if truthy(v):
-                return v
-        return v
+        def run(env):
+            res = None
+            for b in body:
+                res = b(env)
+            return res
+        return run
 
-    def sf_cond(self, x, env):
+    def c_and(self, x, tail):
+        if len(x) == 1:
+            return lambda env: True
+        cs = [self.comp(b) for b in x[1:-1]] + [self.comp(x[-1], tail)]
+
+        def run(env):
+            v = True
+            for c in cs:
+                v = c(env)
+                if not truthy(v):
+                    return v
+            return v
+        return run
+
+    def c_or(self, x, tail):
+        if len(x) == 1:
+            return lambda env: False
+        cs = [self.comp(b) for b in x[1:-1]] + [self.comp(x[-1], tail)]
+
+        def run(env):
+            v = False
+            for c in cs:
+                v = c(env)
+                if truthy(v):
+                    return v
+            return v
+        return run
+
+    def c_cond(self, x, tail):
         if len(x) % 2 == 0:
             raise E("E_SYNTAX", "cond needs test/expr pairs", x, "end with :else expr")
-        for t, v in zip(x[1::2], x[2::2]):
-            if truthy(self.eval(t, env)):
-                return self.eval(v, env)
-        return None
+        pairs = [(self.comp(t), self.comp(v, tail)) for t, v in zip(x[1::2], x[2::2])]
 
-    def sf_match(self, x, env):
+        def run(env):
+            for t, v in pairs:
+                if truthy(t(env)):
+                    return v(env)
+            return None
+        return run
+
+    def c_match(self, x, tail):
         if len(x) < 4 or len(x) % 2 != 0:
             raise E("E_SYNTAX", "syntax: (match expr (ok v) body (err e) body)", x)
-        r = self.eval(x[1], env)
-        if not isinstance(r, Res):
-            raise E("E_TYPE", "match expects a result (ok/err), got %s: %s" % (tname(r), show(r)), x)
+        ec, clauses = self.comp(x[1]), []
         for pat, body in zip(x[2::2], x[3::2]):
             if not (isinstance(pat, Form) and len(pat) == 2 and isinstance(pat[0], Sym)
                     and pat[0].name in ("ok", "err") and isinstance(pat[1], Sym)):
                 raise E("E_SYNTAX", "pattern must be (ok name) or (err name)", pat if isinstance(pat, Form) else x)
-            if (pat[0].name == "ok") == r.ok:
-                e = Env(env)
-                e.v[pat[1].name] = r.val
-                return self.eval(body, e)
-        raise E("E_MATCH", "no clause matched %s" % show(r), x, "add the missing (ok v) or (err e) clause")
+            clauses.append((pat[0].name == "ok", pat[1].name, self.comp(body, tail)))
 
-    def sf_try(self, x, env):
+        def run(env):
+            r = ec(env)
+            if not isinstance(r, Res):
+                raise E("E_TYPE", "match expects a result (ok/err), got %s: %s" % (tname(r), show(r)), x)
+            for is_ok, var, body in clauses:
+                if is_ok == r.ok:
+                    e = Env(env)
+                    e.v[var] = r.val
+                    return body(e)
+            raise E("E_MATCH", "no clause matched %s" % show(r), x, "add the missing (ok v) or (err e) clause")
+        return run
+
+    def c_try(self, x, tail):
         if len(x) != 2:
             raise E("E_SYNTAX", "syntax: (? expr)", x)
-        v = self.eval(x[1], env)
-        if not isinstance(v, Res):
-            raise E("E_TYPE", "? expects a result, got %s: %s" % (tname(v), show(v)), x)
-        if v.ok:
-            return v.val
-        raise EarlyReturn(v)
+        ec = self.comp(x[1])
 
-    def sf_test(self, x, env):
+        def run(env):
+            v = ec(env)
+            if not isinstance(v, Res):
+                raise E("E_TYPE", "? expects a result, got %s: %s" % (tname(v), show(v)), x)
+            if v.ok:
+                return v.val
+            raise EarlyReturn(v)
+        return run
+
+    def c_test(self, x, tail):
         if len(x) < 3 or not isinstance(x[1], str):
             raise E("E_SYNTAX", 'syntax: (test "name" expr...)', x, 'example: (test "adds" (= (add 1 2) 3))')
-        self.tests.append((x[1], list(x[2:]), x, env))
-        return None
+
+        def run(env):
+            if self.module_depth == 0:
+                self.tests.append((x[1], list(x[2:]), x, env))
+            return None
+        return run
+
+    def c_import(self, x, tail):
+        ok = len(x) in (2, 4) and isinstance(x[1], str) and (
+            len(x) == 2 or (x[2] == "as" and isinstance(x[2], Kw) and isinstance(x[3], Sym)))
+        if not ok:
+            raise E("E_SYNTAX", 'syntax: (import "path.lg" :as alias)', x,
+                    "then call alias/name; names starting with _ stay private")
+        path = x[1]
+        alias = x[3].name if len(x) == 4 else os.path.splitext(os.path.basename(path))[0]
+
+        def run(env):
+            menv = self.load_module(path, x)
+            for n, v in menv.v.items():
+                if not n.startswith("_") and "/" not in n:
+                    env.v[alias + "/" + n] = v
+            return None
+        return run
+
+    def resolve_module(self, path, node):
+        p = os.path.realpath(os.path.join(self.cur_dir, path))
+        if p != self.root and not p.startswith(self.root + os.sep):
+            raise E("E_IMPORT", "import %s is outside the project root" % json.dumps(path), node,
+                    "imports must stay inside the directory of the entry file")
+        return p
+
+    def load_module(self, path, node):
+        p = self.resolve_module(path, node)
+        if p in self.modules:
+            return self.modules[p]
+        if p in self.loading:
+            chain = [os.path.relpath(q, self.root) for q in self.loading + [p]]
+            raise E("E_IMPORT", "import cycle: " + " -> ".join(chain), node)
+        try:
+            with open(p, encoding="utf-8") as fh:
+                src = fh.read()
+        except OSError as e:
+            raise E("E_IMPORT", "cannot read module %s: %s" % (json.dumps(path), e.strerror), node)
+        menv, saved = Env(self.base), self.cur_dir
+        self.loading.append(p)
+        self.module_depth += 1
+        self.cur_dir = os.path.dirname(p)
+        try:
+            self.run_forms(parse_program(src)[0], menv)
+        except LageError as e:
+            if e.file is None:
+                e.file, e.src = os.path.relpath(p, self.root), src
+            raise
+        finally:
+            self.loading.pop()
+            self.module_depth -= 1
+            self.cur_dir = saved
+        self.modules[p] = menv
+        return menv
+
 
     # ---- builtins ----
     def _install(self):
         s = self
 
         def reg(name, fn, effect=None):
-            s.glob.v[name] = Builtin(name, fn, effect)
+            s.base.v[name] = Builtin(name, fn, effect)
 
         def add(*a):
+            if len(a) == 2 and type(a[0]) is int and type(a[1]) is int:
+                return a[0] + a[1]
             if a and all(isinstance(v, str) for v in a):
                 raise E("E_TYPE", "+ expects numbers, got str", hint="use (concat ...) or (str ...)")
             return sum(num(v, "+") for v in a)
 
         def sub(a, *r):
+            if len(r) == 1 and type(a) is int and type(r[0]) is int:
+                return a - r[0]
             num(a, "-")
             return -a if not r else a - sum(num(v, "-") for v in r)
 
         def mul(*a):
+            if len(a) == 2 and type(a[0]) is int and type(a[1]) is int:
+                return a[0] * a[1]
             p = 1
             for v in a:
                 p *= num(v, "*")
@@ -720,6 +907,8 @@ class Interp:
 
         def cmp(name, op):
             def f(a, b):
+                if type(a) is int and type(b) is int:
+                    return op(a, b)
                 if isinstance(a, bool) or isinstance(b, bool) or type(a) is not type(b) and not (
                         isinstance(a, (int, float)) and isinstance(b, (int, float))):
                     raise E("E_TYPE", "%s cannot compare %s with %s" % (name, tname(a), tname(b)))

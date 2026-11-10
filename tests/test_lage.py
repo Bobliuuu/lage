@@ -81,6 +81,17 @@ class Lang(unittest.TestCase):
     def test_fuel_and_depth(self):
         self.assertEqual(err("(defn f [x] (f (+ x 1))) (f 1)", fuel=500).code, "E_FUEL")
 
+    def test_tail_calls_are_constant_depth(self):
+        v, _ = run("(defn loop [n acc] (if (= n 0) acc (loop (- n 1) (+ acc n)))) (loop 100000 0)")
+        self.assertEqual(v, 5000050000)
+        v, _ = run("(defn ev? [n] (if (= n 0) true (od? (- n 1)))) (defn od? [n] (if (= n 0) false (ev? (- n 1)))) (ev? 50001)")
+        self.assertFalse(v)
+        self.assertEqual(err("(defn f [x] (f x)) (f 1)", fuel=1000).code, "E_FUEL")
+
+    def test_ensures_blocks_tail_call_but_still_works(self):
+        v, _ = run("(defn f [n] (ensures (>= result 0)) (if (= n 0) 0 (f (- n 1)))) (f 100)")
+        self.assertEqual(v, 0)
+
     def test_tests_report_left_right(self):
         it = Interp(capture=True)
         it.run('(defn f [x] x) (test "ok" (= (f 1) 1)) (test "bad" (= (f 1) 2))')
@@ -138,7 +149,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.sh("run", "examples/files.lg", "--allow", "fs.read").returncode, 0)
 
     def test_depth_limit_compact_stack(self):
-        d = json.loads(self.sh("run", "-", "--json", stdin="(defn f [x] (f x)) (f 1)").stdout)
+        d = json.loads(self.sh("run", "-", "--json", stdin="(defn f [x] (+ 1 (f x))) (f 1)").stdout)
         self.assertEqual(d["error"]["code"], "E_DEPTH")
         self.assertEqual(d["error"]["stack"], ["f x2500"])
 
