@@ -1,0 +1,7 @@
+(import "lib/typedlib.lg" :as t)
+
+(test "parse-scaled ok" (= (t/parse-scaled "5" 2) (ok 10)))
+
+(test "parse-scaled err" (err? (t/parse-scaled "x" 2)))
+
+(match (t/parse-scaled "21" 2) (ok n) n (err e) -1)

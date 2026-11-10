@@ -9,6 +9,7 @@ import os
 
 from .core import (Form, Interp, Kw, LageError, Map, STD_DIR, Sym, Vec, display_path, parse_program,
                    resolve_import)
+from .types import typecheck
 
 SPECIAL = ("def", "defn", "fn", "if", "let", "do", "and", "or", "cond", "match", "?", "test", "import")
 
@@ -30,6 +31,7 @@ class Module:
         self.path, self.src = path, src
         self.lines = src.splitlines()
         self.exports = {}   # name -> info dict (kind, arity, effects)
+        self.types = {}     # exported fn name -> type
         self.diags = []
 
 
@@ -85,7 +87,7 @@ class Checker:
             return None
         if p in self.loading:
             self.diag(importer, "E_IMPORT", "import cycle: " + " -> ".join(
-                os.path.relpath(q, self.root) for q in self.loading + [p]), node)
+                display_path(q, self.root) for q in self.loading + [p]), node)
             return None
         if p in self.mods:
             return self.mods[p]
@@ -131,7 +133,7 @@ class Checker:
                 self.diag(mod, e.code, e.message, _Pos(e.line, e.col) if e.line else node, e.hint)
                 syntax_ok.append(False)
         # pass 1: top-level names (visible inside function bodies regardless of order)
-        top = {}
+        top, import_types = {}, {}
         for f, ok in zip(forms, syntax_ok):
             if ok and isinstance(f, Form) and f and isinstance(f[0], Sym):
                 h = f[0].name
@@ -148,6 +150,8 @@ class Checker:
                     if m:
                         for n, info in m.exports.items():
                             top[alias + "/" + n] = info
+                        for n, t in m.types.items():
+                            import_types[alias + "/" + n] = t
         mod.exports = {n: i for n, i in top.items() if not n.startswith("_") and "/" not in n}
         # pass 2: walk with sequential top-level visibility
         defined = set()
@@ -162,6 +166,14 @@ class Checker:
             self.walk(f, set(), ctx)
             if isinstance(f, Form) and f and isinstance(f[0], Sym) and f[0].name in ("def", "defn"):
                 defined.add(f[1].name)
+        # pass 3: gradual types
+        try:
+            tdiags, types = typecheck([f for f, ok in zip(forms, syntax_ok) if ok], import_types)
+            for code, msg, node, hint in tdiags:
+                self.diag(mod, code, msg, node, hint)
+            mod.types = {n: t for n, t in types.items() if not n.startswith("_") and "/" not in n}
+        except Exception as e:  # noqa: BLE001  (a checker bug must not block running programs)
+            self.diag(mod, "W_TYPECHECK_INTERNAL", "type checker crashed: %r" % (e,), None, severity="warning")
 
     def _fn_info(self, params, rest, named):
         eff = ()

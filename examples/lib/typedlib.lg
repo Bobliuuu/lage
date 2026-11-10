@@ -1,0 +1,7 @@
+(defn scale [x k] "multiply x by k" (sig [int int] int) (* x k))
+
+(defn parse-scaled [s k]
+  (sig [str int] (result int str))
+  (let [n (? (parse-int s))] (ok (scale n k))))
+
+(test "scale" (= (scale 3 4) 12))

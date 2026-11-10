@@ -138,6 +138,47 @@ class Static(unittest.TestCase):
         self.assertEqual(codes("(let [len (fn [a b c] a)] (len 1 2 3))"), [])
 
 
+class Types(unittest.TestCase):
+    def test_clean(self):
+        ok = """(defn add [a b] (sig [int int] int) (+ a b))
+                (defn f [x] (sig [(list int)] int) (reduce (fn [acc y] (+ acc y)) 0 x))
+                (defn id [x] (sig [t] t) x)
+                (defn p [s] (sig [str] (result int str)) (let [n (? (parse-int s))] (ok (+ n 1))))
+                (add 1 2) (f [1 2 3]) (id "s") (id 1)
+                (defn unannotated [a b] (+ a b)) (unannotated "x" "y")"""
+        self.assertEqual(codes(ok), [])  # unannotated code is never a type error source
+
+    def test_arg_and_return_mismatch(self):
+        self.assertEqual(codes('(defn add [a b] (sig [int int] int) (+ a b)) (add 1 "2")'), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes('(defn f [] (sig [] int) "x")'), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes("(defn f [c] (sig [bool] int) (if c 1 nil))"), ["E_TYPE_MISMATCH"])  # nil safety
+
+    def test_generics_bind_per_call(self):
+        self.assertEqual(codes('(defn first-or [xs d] (sig [(list t) t] t) d) (first-or [1] "x")'), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes("(defn first-or [xs d] (sig [(list t) t] t) d) (first-or [1] 2) (first-or [\"a\"] \"b\")"), [])
+
+    def test_builtin_sigs_and_lambdas(self):
+        self.assertEqual(codes('(map (fn [x] (+ x 1)) ["a"])'), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes("(defn g [s] (sig [str] str) s) (map g [1 2])"), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes('(+ 1 "x")'), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes("(reduce (fn [a x] (+ a x)) 0 [1 2 3])"), [])
+
+    def test_try_and_match(self):
+        self.assertEqual(codes('(defn f [s] (sig [str] int) (? (parse-int s)))'), ["E_TYPE_MISMATCH"])
+        self.assertEqual(codes('(match (parse-int "1") (ok n) (+ n 1) (err e) (+ e 1))'), ["E_TYPE_MISMATCH"])
+
+    def test_bad_sig(self):
+        self.assertEqual(codes("(defn f [a] (sig [int int] int) a)"), ["E_SIG"])
+        self.assertEqual(codes("(defn f [a] (sig [(lst int)] int) a)"), ["E_SIG"])
+
+    def test_sigs_cross_modules(self):
+        p = os.path.join(ROOT, "examples", "typed_use.lg")
+        self.assertEqual(check(open(p).read(), path=p), [])
+        d = check('(import "lib/typedlib.lg" :as t) (t/scale "x" 2)', root=ROOT,
+                  path=os.path.join(ROOT, "examples", "x.lg"))
+        self.assertEqual([x["code"] for x in d], ["E_TYPE_MISMATCH"])
+
+
 class Modules(unittest.TestCase):
     def test_import_run_and_checker(self):
         p = os.path.join(ROOT, "examples", "use_lib.lg")
@@ -227,7 +268,7 @@ class Cli(unittest.TestCase):
         self.assertEqual(self.sh("check", "examples/use_lib.lg").returncode, 0)
 
     def test_ref(self):
-        self.assertIn("lage 0.1", self.sh("ref").stdout)
+        self.assertIn("lage 0.3", self.sh("ref").stdout)
 
 
 if __name__ == "__main__":

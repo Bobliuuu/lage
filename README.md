@@ -22,6 +22,7 @@ Reference implementation in Python (stdlib only). Files use the `.lg` extension.
 | "Does it work?" needs a harness | `requires` / `ensures` contracts and `(test ...)` forms live beside the code. `lage test` reports `left` / `right` on failed `=`. |
 | Free-text stack traces | Every failure is a JSON diagnostic: `code`, `line`, `col`, `source`, `hint` (e.g. `did you mean: print`), compressed `stack`. |
 | One error per run, slow fix loops | `lage check` reports **every** unbound name (with suggestions), wrong arity, undeclared effect, bad form and bad import in one pass, before anything executes. `run` and `test` do this first. |
+| Wrong-type bugs that only show at runtime | Optional gradual types: `(sig [int (list str)] (result int str))`. Generics via lowercase type variables, `nil`-safety (`(if c 1 nil)` is not an `int`), result/`?`/`match` checking, builtin signatures. Unannotated code is never an error source; types are static only. |
 | Runaway loops | Fuel budget (`--fuel`) and a call-depth cap. `E_FUEL` / `E_DEPTH`, never a hang. Tail calls run in constant depth. |
 | Growing past one file | `(import "lib/m.lg" :as m)` with `m/name` calls. Imports are confined to the entry file's directory, cycles are errors, `_private` names stay private, the checker follows imports. |
 | Exceptions to forget | No exceptions. Fallible builtins return `(ok v)` / `(err e)`; `(? r)` propagates. |
