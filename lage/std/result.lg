@@ -1,0 +1,83 @@
+; std/result: helpers over (ok v) / (err e). The function comes first, the result last.
+(defn map-ok [f r]
+  "(ok (f v)) for (ok v); an err passes through"
+  (match r (ok v) (ok (f v)) (err e) r))
+
+(defn map-err [f r]
+  "(err (f e)) for (err e); an ok passes through"
+  (match r (ok v) r (err e) (err (f e))))
+
+(defn and-then [f r]
+  "(f v) for (ok v), where f returns a result; an err passes through"
+  (match r (ok v) (f v) (err e) r))
+
+(defn or-else [f r]
+  "(f e) for (err e), where f returns a result; an ok passes through"
+  (match r (ok v) r (err e) (f e)))
+
+(defn _collect [rs i acc]
+  (cond
+    (>= i (len rs))
+    (ok acc)
+    (ok? (nth rs i))
+    (_collect rs (+ i 1) (append acc (val (nth rs i))))
+    :else
+    (nth rs i)))
+
+(defn collect [rs]
+  "list of results -> (ok list-of-values), or the first err; (ok []) for []"
+  (_collect rs 0 []))
+
+(defn all-ok? [rs]
+  "true if every result is ok (true for [])"
+  (= (len (filter err? rs)) 0))
+
+(defn unwrap [r]
+  "the value of an ok; raises E_ASSERT for an err"
+  (assert (ok? r) (str "unwrap on err: " (val r)))
+  (val r))
+
+(defn partition-results [rs]
+  "{:ok [values of oks] :err [values of errs]}, order kept"
+  {:ok (map val (filter ok? rs)) :err (map val (filter err? rs))})
+
+(test "map-ok"
+  (= (map-ok (fn [x] (+ x 1)) (ok 1)) (ok 2))
+  (= (map-ok (fn [x] (+ x 1)) (err "e")) (err "e"))
+  (= (map-ok (fn [x] x) (ok nil)) (ok nil)))
+
+(test "map-err"
+  (= (map-err upper (err "e")) (err "E"))
+  (= (map-err upper (ok "v")) (ok "v")))
+
+(test "and-then"
+  (= (and-then (fn [x] (ok (* x 2))) (ok 2)) (ok 4))
+  (= (and-then (fn [x] (err "bad")) (ok 2)) (err "bad"))
+  (= (and-then (fn [x] (ok x)) (err "e")) (err "e"))
+  (= (and-then parse-int (ok "12")) (ok 12)))
+
+(test "or-else"
+  (= (or-else (fn [e] (ok 0)) (err "e")) (ok 0))
+  (= (or-else (fn [e] (ok 0)) (ok 5)) (ok 5))
+  (= (or-else (fn [e] (err (str e "!"))) (err "e")) (err "e!")))
+
+(test "collect"
+  (= (collect [(ok 1) (ok 2)]) (ok [1 2]))
+  (= (collect []) (ok []))
+  (= (collect [(ok 1) (err "a") (err "b")]) (err "a"))
+  (= (collect (map parse-int ["1" "2"])) (ok [1 2])))
+
+(test "all-ok?"
+  (= (all-ok? [(ok 1) (ok 2)]) true)
+  (= (all-ok? [(ok 1) (err 2)]) false)
+  (= (all-ok? []) true))
+
+(test "unwrap"
+  (= (unwrap (ok 3)) 3)
+  (= (unwrap (ok nil)) nil)
+  (= (unwrap (ok [1])) [1]))
+
+(test "partition-results"
+  (= (partition-results [(ok 1) (err "a") (ok 2)]) {:ok [1 2] :err ["a"]})
+  (= (partition-results []) {:ok [] :err []})
+  (= (partition-results [(err 1)]) {:ok [] :err [1]}))

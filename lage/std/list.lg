@@ -1,0 +1,234 @@
+; std/list: list utilities. Higher-order functions take the function first.
+(defn _idx-where [f xs i]
+  "index of the first element of xs (from i) where (f x) is truthy, else -1"
+  (cond (>= i (len xs)) -1 (f (nth xs i)) i :else (_idx-where f xs (+ i 1))))
+
+(defn take [n xs]
+  "first n elements (all of xs if n >= length, [] if n <= 0)"
+  (slice xs 0 n))
+
+(defn drop [n xs] "xs without its first n elements" (slice xs n))
+
+(defn take-while [f xs]
+  "longest prefix of xs whose elements all satisfy f"
+  (let [i (_idx-where (fn [x] (not (f x))) xs 0)]
+    (if (= i -1) xs (slice xs 0 i))))
+
+(defn drop-while [f xs]
+  "xs without its longest prefix whose elements satisfy f"
+  (let [i (_idx-where (fn [x] (not (f x))) xs 0)] (if (= i -1) [] (slice xs i))))
+
+(defn zip [xs ys]
+  "list of [x y] pairs, as long as the shorter list"
+  (map (fn [i] [(nth xs i) (nth ys i)]) (range (min [(len xs) (len ys)]))))
+
+(defn zip-with [f xs ys]
+  "(f x y) over pairs, as long as the shorter list"
+  (map (fn [i] (f (nth xs i) (nth ys i))) (range (min [(len xs) (len ys)]))))
+
+(defn enumerate [xs]
+  "list of [index x] pairs"
+  (map (fn [i] [i (nth xs i)]) (range (len xs))))
+
+(defn flatten [xs]
+  "recursively flatten nested lists into one flat list"
+  (reduce
+    (fn [acc x]
+      (if (= (type x) "list") (concat acc (flatten x)) (append acc x)))
+    []
+    xs))
+
+(defn concat-map [f xs]
+  "map f (which returns a list) over xs and concatenate the results"
+  (reduce (fn [acc x] (concat acc (f x))) [] xs))
+
+(defn partition [f xs]
+  "[matching non-matching] split of xs by predicate f, order kept"
+  [(filter f xs) (filter (fn [x] (not (f x))) xs)])
+
+(defn group-by [f xs]
+  "map from (str (f x)) to the list of elements with that key, in first-seen key order"
+  (reduce
+    (fn [acc x] (let [k (str (f x))] (assoc acc k (append (get acc k []) x))))
+    {}
+    xs))
+
+(defn uniq [xs]
+  "xs without duplicates, keeping the first occurrence of each"
+  (reduce (fn [acc x] (if (contains? acc x) acc (append acc x))) [] xs))
+
+(defn count [f xs] "number of elements satisfying f" (len (filter f xs)))
+
+(defn find [f xs]
+  "first element satisfying f, or nil"
+  (let [i (_idx-where f xs 0)] (if (= i -1) nil (nth xs i))))
+
+(defn any? [f xs]
+  "true if some element satisfies f (false for [])"
+  (>= (_idx-where f xs 0) 0))
+
+(defn all? [f xs]
+  "true if every element satisfies f (true for [])"
+  (= (_idx-where (fn [x] (not (f x))) xs 0) -1))
+
+(defn none? [f xs]
+  "true if no element satisfies f (true for [])"
+  (= (_idx-where f xs 0) -1))
+
+(defn sum-by [f xs] "sum of (f x) over xs (0 for [])" (sum (map f xs)))
+
+(defn _best-by [better? f xs]
+  (if (= (len xs) 0)
+    nil
+    (first
+      (reduce
+        (fn [best x] (let [k (f x)] (if (better? k (nth best 1)) [x k] best)))
+        [(first xs) (f (first xs))]
+        (rest xs)))))
+
+(defn min-by [f xs]
+  "element with the smallest (f x); the first one on ties; nil for []"
+  (_best-by (fn [a b] (< a b)) f xs))
+
+(defn max-by [f xs]
+  "element with the largest (f x); the first one on ties; nil for []"
+  (_best-by (fn [a b] (> a b)) f xs))
+
+(defn last-n [n xs]
+  "last n elements (all of xs if n >= length, [] if n <= 0)"
+  (if (<= n 0) [] (slice xs (- (len xs) n))))
+
+(defn _chunk [n xs i acc]
+  (if (>= i (len xs))
+    acc
+    (_chunk n xs (+ i n) (append acc (slice xs i (+ i n))))))
+
+(defn chunk [n xs]
+  "split xs into lists of n elements; the last may be shorter"
+  (requires (> n 0))
+  (_chunk n xs 0 []))
+
+(defn interleave [xs ys]
+  "alternate elements x1 y1 x2 y2 ...; leftovers of the longer list are appended"
+  (let [n (min [(len xs) (len ys)])]
+    (concat
+      (concat-map (fn [i] [(nth xs i) (nth ys i)]) (range n))
+      (slice xs n)
+      (slice ys n))))
+
+(defn repeat [n x]
+  "list of n copies of x ([] if n <= 0)"
+  (map (fn [i] x) (range n)))
+
+(defn index-by [f xs]
+  "map from (str (f x)) to x; later elements win on duplicate keys"
+  (reduce (fn [acc x] (assoc acc (str (f x)) x)) {} xs))
+
+(test "take/drop"
+  (= (take 2 [1 2 3]) [1 2])
+  (= (take 9 [1 2]) [1 2])
+  (= (take 0 [1]) [])
+  (= (take -1 [1]) [])
+  (= (take 2 []) [])
+  (= (drop 1 [1 2 3]) [2 3])
+  (= (drop 9 [1]) [])
+  (= (drop -2 [1 2]) [1 2])
+  (= (drop 1 []) []))
+
+(test "take-while/drop-while"
+  (= (take-while (fn [x] (< x 3)) [1 2 3 1]) [1 2])
+  (= (take-while (fn [x] (< x 9)) [1 2]) [1 2])
+  (= (take-while (fn [x] (< x 0)) [1 2]) [])
+  (= (take-while (fn [x] true) []) [])
+  (= (drop-while (fn [x] (< x 3)) [1 2 3 1]) [3 1])
+  (= (drop-while (fn [x] (< x 9)) [1 2]) [])
+  (= (drop-while (fn [x] (< x 0)) [1 2]) [1 2])
+  (= (drop-while (fn [x] true) []) []))
+
+(test "zip"
+  (= (zip [1 2 3] ["a" "b"]) [[1 "a"] [2 "b"]])
+  (= (zip [] [1]) [])
+  (= (zip [1] []) [])
+  (= (zip-with + [1 2 3] [10 20]) [11 22])
+  (= (zip-with + [] []) []))
+
+(test "enumerate"
+  (= (enumerate ["a" "b"]) [[0 "a"] [1 "b"]])
+  (= (enumerate []) []))
+
+(test "flatten"
+  (= (flatten [1 [2 [3 []] 4] []]) [1 2 3 4])
+  (= (flatten []) [])
+  (= (flatten [[] [[]]]) [])
+  (= (flatten [[1] [2]]) [1 2]))
+
+(test "concat-map"
+  (= (concat-map (fn [x] [x x]) [1 2]) [1 1 2 2])
+  (= (concat-map (fn [x] [x]) []) [])
+  (= (concat-map (fn [x] []) [1 2]) []))
+
+(test "partition"
+  (= (partition (fn [x] (> x 1)) [1 2 3 0]) [[2 3] [1 0]])
+  (= (partition (fn [x] true) []) [[] []])
+  (= (partition (fn [x] false) [1]) [[] [1]]))
+
+(test "group-by"
+  (= (group-by (fn [x] (mod x 2)) [1 2 3 4]) {:1 [1 3] :0 [2 4]})
+  (= (group-by len []) {})
+  (= (group-by (fn [s] (len s)) ["a" "bb" "c"]) {:1 ["a" "c"] :2 ["bb"]}))
+
+(test "uniq"
+  (= (uniq [1 2 1 3 2]) [1 2 3])
+  (= (uniq []) [])
+  (= (uniq [[1] [1] [2]]) [[1] [2]]))
+
+(test "count/find"
+  (= (count (fn [x] (> x 1)) [1 2 3]) 2)
+  (= (count (fn [x] true) []) 0)
+  (= (find (fn [x] (> x 1)) [1 2 3]) 2)
+  (= (find (fn [x] (> x 5)) [1]) nil)
+  (= (find (fn [x] true) []) nil))
+
+(test "any/all/none"
+  (= (any? (fn [x] (> x 2)) [1 3]) true)
+  (= (any? (fn [x] true) []) false)
+  (= (all? (fn [x] (> x 0)) [1 2]) true)
+  (= (all? (fn [x] (> x 1)) [1 2]) false)
+  (= (all? (fn [x] false) []) true)
+  (= (none? (fn [x] (> x 5)) [1 2]) true)
+  (= (none? (fn [x] (> x 1)) [1 2]) false)
+  (= (none? (fn [x] true) []) true))
+
+(test "sum-by/min-by/max-by"
+  (= (sum-by len ["a" "bb"]) 3)
+  (= (sum-by len []) 0)
+  (= (min-by len ["bb" "a" "c"]) "a")
+  (= (max-by len ["bb" "a" "cc"]) "bb")
+  (= (min-by len []) nil)
+  (= (max-by len []) nil)
+  (= (max-by (fn [x] x) [5]) 5))
+
+(test "last-n"
+  (= (last-n 2 [1 2 3]) [2 3])
+  (= (last-n 5 [1 2]) [1 2])
+  (= (last-n 0 [1]) [])
+  (= (last-n 2 []) []))
+
+(test "chunk"
+  (= (chunk 2 [1 2 3 4 5]) [[1 2] [3 4] [5]])
+  (= (chunk 3 []) [])
+  (= (chunk 9 [1]) [[1]]))
+
+(test "interleave"
+  (= (interleave [1 2 3] ["a" "b"]) [1 "a" 2 "b" 3])
+  (= (interleave [] [1 2]) [1 2])
+  (= (interleave [] []) []))
+
+(test "repeat"
+  (= (repeat 3 "x") ["x" "x" "x"])
+  (= (repeat 0 1) [])
+  (= (repeat -2 1) []))
+
+(test "index-by"
+  (= (index-by len ["a" "bb" "c"]) {:1 "c" :2 "bb"})
+  (= (index-by len []) {}))

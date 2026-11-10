@@ -1,0 +1,122 @@
+; std/str: string utilities.
+(defn repeat-str [s n]
+  "s repeated n times (\"\" if n <= 0)"
+  (join "" (map (fn [i] s) (range n))))
+
+(defn pad-left [s n ch]
+  "pad s on the left with the string ch up to length n (unchanged if already longer)"
+  (concat (repeat-str ch (- n (len s))) s))
+
+(defn pad-right [s n ch]
+  "pad s on the right with the string ch up to length n (unchanged if already longer)"
+  (concat s (repeat-str ch (- n (len s)))))
+
+(defn center [s n ch]
+  "pad s on both sides with ch up to length n; the extra pad goes on the right"
+  (let [total (- n (len s)) left (floor (/ (max [total 0]) 2))]
+    (concat (repeat-str ch left) s (repeat-str ch (- (max [total 0]) left)))))
+
+(defn lines [s]
+  "split on newlines; one trailing newline does not create an extra empty line; \"\" gives []"
+  (cond
+    (= s "")
+    []
+    (ends-with? s "\n")
+    (split (slice s 0 (- (len s) 1)) "\n")
+    :else
+    (split s "\n")))
+
+(defn unlines [ls]
+  "join lines, ending each with a newline (inverse of lines)"
+  (join "" (map (fn [l] (concat l "\n")) ls)))
+
+(defn words [s]
+  "split on runs of spaces, tabs and newlines; no empty words"
+  (filter
+    (fn [w] (!= w ""))
+    (split (replace (replace s "\n" " ") "\t" " ") " ")))
+
+(defn unwords [ws] "join words with single spaces" (join " " ws))
+
+(defn capitalize [s]
+  "upper-case the first character, leave the rest unchanged (\"\" stays \"\")"
+  (if (= s "") "" (concat (upper (slice s 0 1)) (slice s 1))))
+
+(defn truncate [s n]
+  "at most n characters; longer strings end in \"...\" (cut hard if n < 3)"
+  (requires (>= n 0))
+  (cond
+    (<= (len s) n)
+    s
+    (< n 3)
+    (slice s 0 n)
+    :else
+    (concat (slice s 0 (- n 3)) "...")))
+
+(defn surround [s left right] "left + s + right" (concat left s right))
+
+(defn count-substr [s sub]
+  "number of non-overlapping occurrences of sub in s"
+  (requires (!= sub ""))
+  (- (len (split s sub)) 1))
+
+(test "repeat-str"
+  (= (repeat-str "ab" 3) "ababab")
+  (= (repeat-str "x" 0) "")
+  (= (repeat-str "x" -1) "")
+  (= (repeat-str "" 3) ""))
+
+(test "pad"
+  (= (pad-left "7" 3 "0") "007")
+  (= (pad-left "abcd" 3 " ") "abcd")
+  (= (pad-left "" 2 "-") "--")
+  (= (pad-right "ab" 4 ".") "ab..")
+  (= (pad-right "abc" 2 ".") "abc")
+  (= (pad-right "" 0 ".") ""))
+
+(test "center"
+  (= (center "ab" 6 "*") "**ab**")
+  (= (center "ab" 5 "*") "*ab**")
+  (= (center "abc" 2 "*") "abc")
+  (= (center "" 3 "-") "---"))
+
+(test "lines/unlines"
+  (= (lines "a\nb") ["a" "b"])
+  (= (lines "a\nb\n") ["a" "b"])
+  (= (lines "") [])
+  (= (lines "\n") [""])
+  (= (lines "a\n\nb") ["a" "" "b"])
+  (= (unlines ["a" "b"]) "a\nb\n")
+  (= (unlines []) "")
+  (= (lines (unlines ["x" "" "y"])) ["x" "" "y"]))
+
+(test "words"
+  (= (words "  a  b\tc\nd ") ["a" "b" "c" "d"])
+  (= (words "") [])
+  (= (words "   ") [])
+  (= (unwords ["a" "b"]) "a b")
+  (= (unwords []) ""))
+
+(test "capitalize"
+  (= (capitalize "hello") "Hello")
+  (= (capitalize "") "")
+  (= (capitalize "hELLO") "HELLO")
+  (= (capitalize "1a") "1a"))
+
+(test "truncate"
+  (= (truncate "hello world" 8) "hello...")
+  (= (truncate "hi" 8) "hi")
+  (= (truncate "hello" 5) "hello")
+  (= (truncate "hello" 2) "he")
+  (= (truncate "" 0) "")
+  (= (truncate "abc" 0) ""))
+
+(test "surround"
+  (= (surround "x" "(" ")") "(x)")
+  (= (surround "" "[" "]") "[]"))
+
+(test "count-substr"
+  (= (count-substr "banana" "an") 2)
+  (= (count-substr "aaaa" "aa") 2)
+  (= (count-substr "" "a") 0)
+  (= (count-substr "abc" "z") 0))

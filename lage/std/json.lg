@@ -1,0 +1,90 @@
+; std/json: pretty printing and path lookup for JSON-like data.
+(import "std/str" :as s)
+
+(defn _pp [v depth]
+  (let [pad (s/repeat-str "  " depth) inner (s/repeat-str "  " (+ depth 1))]
+    (cond
+      (and (= (type v) "list") (= (len v) 0))
+      "[]"
+      (= (type v) "list")
+      (concat
+        "[\n"
+        (join ",\n" (map (fn [x] (concat inner (_pp x (+ depth 1)))) v))
+        "\n"
+        pad
+        "]")
+      (and (= (type v) "map") (= (len (keys v)) 0))
+      "{}"
+      (= (type v) "map")
+      (concat
+        "{\n"
+        (join
+          ",\n"
+          (map
+            (fn [k] (concat inner (to-json k) ": " (_pp (get v k) (+ depth 1))))
+            (keys v)))
+        "\n"
+        pad
+        "}")
+      :else
+      (to-json v))))
+
+(defn pretty [v]
+  "JSON text for v, indented two spaces per level; empty lists and maps print as [] and {}"
+  (_pp v 0))
+
+(defn _path [data path i]
+  (if (>= i (len path))
+    (ok data)
+    (let [k (nth path i)]
+      (cond
+        (and (= (type data) "map") (has? data k))
+        (_path (get data k) path (+ i 1))
+        (and
+          (= (type data) "list")
+          (= (type k) "int")
+          (>= k 0)
+          (< k (len data)))
+        (_path (get data k) path (+ i 1))
+        :else
+        (err (str "no value at " (to-json (slice path 0 (+ i 1)))))))))
+
+(defn get-path [data path]
+  "(ok value) at the list of keys/indexes path, or (err message) naming the first missing step"
+  (_path data path 0))
+
+(test "pretty scalars"
+  (= (pretty 1) "1")
+  (= (pretty "a\"b") "\"a\\\"b\"")
+  (= (pretty nil) "null")
+  (= (pretty true) "true")
+  (= (pretty 1.5) "1.5"))
+
+(test "pretty empty"
+  (= (pretty []) "[]")
+  (= (pretty {}) "{}")
+  (= (pretty {:a []}) "{\n  \"a\": []\n}"))
+
+(test "pretty nested"
+  (= (pretty [1 2]) "[\n  1,\n  2\n]")
+  (=
+    (pretty {:a 1 :b [true {:c nil}]})
+    "{\n  \"a\": 1,\n  \"b\": [\n    true,\n    {\n      \"c\": null\n    }\n  ]\n}"))
+
+(test "pretty roundtrip"
+  (=
+    (from-json (pretty {:a [1 2 {:b "x"}] :c {}}))
+    (ok {:a [1 2 {:b "x"}] :c {}})))
+
+(test "get-path ok"
+  (= (get-path {:a [10 {:b 5}]} ["a" 1 "b"]) (ok 5))
+  (= (get-path 7 []) (ok 7))
+  (= (get-path {:a nil} ["a"]) (ok nil))
+  (= (get-path [1 2] [0]) (ok 1)))
+
+(test "get-path err"
+  (= (get-path {:a 1} ["b"]) (err "no value at [\"b\"]"))
+  (= (get-path [1] [3]) (err "no value at [3]"))
+  (= (get-path {:a 1} ["a" "x"]) (err "no value at [\"a\",\"x\"]"))
+  (= (get-path [1] [-1]) (err "no value at [-1]"))
+  (= (get-path [1] ["a"]) (err "no value at [\"a\"]")))

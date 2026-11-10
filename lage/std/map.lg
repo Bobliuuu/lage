@@ -1,0 +1,124 @@
+; std/map: map utilities. Keys are strings (keywords and strings are the same key).
+(defn merge [a b]
+  "union of two maps; on shared keys b wins"
+  (reduce (fn [acc k] (assoc acc k (get b k))) a (keys b)))
+
+(defn merge-all [ms]
+  "merge a list of maps left to right; later wins ({} for [])"
+  (reduce merge {} ms))
+
+(defn select-keys [m ks]
+  "map with only the keys in ks that exist in m"
+  (reduce (fn [acc k] (if (has? m k) (assoc acc k (get m k)) acc)) {} ks))
+
+(defn map-vals [f m]
+  "apply f to every value"
+  (reduce (fn [acc k] (assoc acc k (f (get m k)))) {} (keys m)))
+
+(defn filter-vals [f m]
+  "keep entries whose value satisfies f"
+  (reduce
+    (fn [acc k] (if (f (get m k)) (assoc acc k (get m k)) acc))
+    {}
+    (keys m)))
+
+(defn map-keys [f m]
+  "apply f (returning a string or keyword) to every key; later wins on collisions"
+  (reduce (fn [acc k] (assoc acc (f k) (get m k))) {} (keys m)))
+
+(defn update [m k f]
+  "set key k to (f current-value); the current value is nil when k is missing"
+  (assoc m k (f (get m k))))
+
+(defn get-in [m path]
+  "value at the list of keys/indexes path through nested maps and lists; nil if missing"
+  (cond
+    (= (len path) 0)
+    m
+    (= (type m) "map")
+    (get-in (get m (first path)) (rest path))
+    (and (= (type m) "list") (= (type (first path)) "int"))
+    (get-in (get m (first path)) (rest path))
+    :else
+    nil))
+
+(defn assoc-in [m path v]
+  "set the value at path (a non-empty list of keys) through nested maps, creating maps as needed"
+  (requires (> (len path) 0))
+  (let [k (first path)]
+    (if (= (len path) 1)
+      (assoc (if (= (type m) "map") m {}) k v)
+      (assoc
+        (if (= (type m) "map") m {})
+        k
+        (assoc-in (get (if (= (type m) "map") m {}) k) (rest path) v)))))
+
+(defn from-pairs [ps]
+  "map from a list of [key value] pairs; later wins"
+  (reduce (fn [acc p] (assoc acc (nth p 0) (nth p 1))) {} ps))
+
+(defn to-pairs [m]
+  "list of [key value] pairs in key order"
+  (map (fn [k] [k (get m k)]) (keys m)))
+
+(defn invert [m]
+  "swap keys and values; values become keys via str; later wins"
+  (reduce (fn [acc k] (assoc acc (str (get m k)) k)) {} (keys m)))
+
+(test "merge"
+  (= (merge {:a 1 :b 2} {:b 3 :c 4}) {:a 1 :b 3 :c 4})
+  (= (merge {} {}) {})
+  (= (merge {:a 1} {}) {:a 1})
+  (= (merge {} {:a 1}) {:a 1})
+  (= (merge-all [{:a 1} {:a 2} {:b 3}]) {:a 2 :b 3})
+  (= (merge-all []) {}))
+
+(test "select-keys"
+  (= (select-keys {:a 1 :b 2 :c 3} ["a" "c" "z"]) {:a 1 :c 3})
+  (= (select-keys {} ["a"]) {})
+  (= (select-keys {:a 1} []) {}))
+
+(test "map-vals/filter-vals"
+  (= (map-vals (fn [v] (* v 2)) {:a 1 :b 2}) {:a 2 :b 4})
+  (= (map-vals str {}) {})
+  (= (filter-vals (fn [v] (> v 1)) {:a 1 :b 2}) {:b 2})
+  (= (filter-vals (fn [v] false) {:a 1}) {}))
+
+(test "map-keys"
+  (= (map-keys upper {:a 1 :b 2}) {:A 1 :B 2})
+  (= (map-keys upper {}) {})
+  (= (map-keys (fn [k] "x") {:a 1 :b 2}) {:x 2}))
+
+(test "update"
+  (= (update {:n 1} "n" (fn [v] (+ v 1))) {:n 2})
+  (= (update {} "n" (fn [v] (if v v 0))) {:n 0})
+  (= (update {:a 1} "b" (fn [v] 5)) {:a 1 :b 5}))
+
+(test "get-in"
+  (= (get-in {:a {:b [10 20]}} ["a" "b" 1]) 20)
+  (= (get-in {:a 1} []) {:a 1})
+  (= (get-in {:a 1} ["b"]) nil)
+  (= (get-in {:a 1} ["a" "b"]) nil)
+  (= (get-in {} ["a" "b"]) nil)
+  (= (get-in {:a [1]} ["a" 5]) nil)
+  (= (get-in [1 [2 3]] [1 0]) 2)
+  (= (get-in {:a nil} ["a" "b"]) nil))
+
+(test "assoc-in"
+  (= (assoc-in {} ["a" "b"] 1) {:a {:b 1}})
+  (= (assoc-in {:a {:c 2}} ["a" "b"] 1) {:a {:c 2 :b 1}})
+  (= (assoc-in {:a 5} ["a" "b"] 1) {:a {:b 1}})
+  (= (assoc-in {} ["a"] 1) {:a 1}))
+
+(test "pairs"
+  (= (from-pairs [["a" 1] ["b" 2] ["a" 3]]) {:a 3 :b 2})
+  (= (from-pairs []) {})
+  (= (to-pairs {:a 1 :b 2}) [["a" 1] ["b" 2]])
+  (= (to-pairs {}) [])
+  (= (from-pairs (to-pairs {:x 1 :y 2})) {:x 1 :y 2}))
+
+(test "invert"
+  (= (invert {:a "x" :b "y"}) {:x "a" :y "b"})
+  (= (invert {}) {})
+  (= (invert {:a 1}) {:1 "a"})
+  (= (invert {:a "x" :b "x"}) {:x "b"}))
