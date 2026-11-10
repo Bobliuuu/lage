@@ -378,6 +378,31 @@ class Env:
         return out
 
 
+STD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "std")
+
+
+def resolve_import(cur_dir, root, path):
+    """Resolve an import path to a real file path. `std/NAME` = bundled stdlib.
+    Raises ValueError((message, hint)) on escape attempts."""
+    if path.startswith("std/"):
+        name = path[4:]
+        p = os.path.realpath(os.path.join(STD_DIR, name if name.endswith(".lg") else name + ".lg"))
+        if not p.startswith(STD_DIR + os.sep):
+            raise ValueError(("import %s escapes the stdlib" % json.dumps(path), None))
+        return p
+    p = os.path.realpath(os.path.join(cur_dir, path))
+    if p != root and not p.startswith(root + os.sep):
+        raise ValueError(("import %s is outside the project root" % json.dumps(path),
+                          "imports must stay inside the directory of the entry file"))
+    return p
+
+
+def display_path(p, root):
+    if p.startswith(STD_DIR + os.sep):
+        return "std/" + os.path.relpath(p, STD_DIR)
+    return os.path.relpath(p, root)
+
+
 def covers(granted, eff):
     return "*" in granted or eff in granted or eff.split(".")[0] in granted
 
@@ -641,7 +666,7 @@ class Interp:
             if len(rest) > 1 and isinstance(rest[0], str):
                 doc = rest.pop(0)
             while rest and isinstance(rest[0], Form) and rest[0] and isinstance(rest[0][0], Sym) \
-                    and rest[0][0].name in ("effects", "requires", "ensures"):
+                    and rest[0][0].name in ("effects", "requires", "ensures", "sig"):
                 c = rest.pop(0)
                 k = c[0].name
                 if k == "effects":
@@ -650,6 +675,8 @@ class Interp:
                     eff += [s.name for s in c[1:]]
                 elif k == "requires":
                     req += c[1:]
+                elif k == "sig":
+                    pass  # static only; checked by `lage check`
                 else:
                     ens += c[1:]
         if not rest:
@@ -828,18 +855,17 @@ class Interp:
         return run
 
     def resolve_module(self, path, node):
-        p = os.path.realpath(os.path.join(self.cur_dir, path))
-        if p != self.root and not p.startswith(self.root + os.sep):
-            raise E("E_IMPORT", "import %s is outside the project root" % json.dumps(path), node,
-                    "imports must stay inside the directory of the entry file")
-        return p
+        try:
+            return resolve_import(self.cur_dir, self.root, path)
+        except ValueError as ve:
+            raise E("E_IMPORT", ve.args[0][0], node, ve.args[0][1])
 
     def load_module(self, path, node):
         p = self.resolve_module(path, node)
         if p in self.modules:
             return self.modules[p]
         if p in self.loading:
-            chain = [os.path.relpath(q, self.root) for q in self.loading + [p]]
+            chain = [display_path(q, self.root) for q in self.loading + [p]]
             raise E("E_IMPORT", "import cycle: " + " -> ".join(chain), node)
         try:
             with open(p, encoding="utf-8") as fh:
@@ -854,7 +880,7 @@ class Interp:
             self.run_forms(parse_program(src)[0], menv)
         except LageError as e:
             if e.file is None:
-                e.file, e.src = os.path.relpath(p, self.root), src
+                e.file, e.src = display_path(p, self.root), src
             raise
         finally:
             self.loading.pop()
@@ -990,6 +1016,28 @@ class Interp:
         reg("sort", srt), reg("reverse", lambda xs: xs[::-1]), reg("concat", concat)
         reg("sum", lambda xs: sum(num(v, "sum") for v in xs))
         reg("min", lambda xs: min(xs)), reg("max", lambda xs: max(xs))
+
+        import math
+        reg("abs", lambda x: abs(num(x, "abs")))
+        reg("floor", lambda x: math.floor(num(x, "floor"))), reg("ceil", lambda x: math.ceil(num(x, "ceil")))
+        reg("round", lambda x: round(num(x, "round")))
+        reg("pow", lambda a, b: num(a, "pow") ** num(b, "pow"))
+        reg("sqrt", lambda x: math.sqrt(num(x, "sqrt")))
+
+        def slice_(c, a, b=None):
+            if not isinstance(c, (list, str)):
+                raise E("E_TYPE", "slice expects a list or str, got %s" % tname(c))
+            return c[max(a, 0):b if b is None else max(b, 0)]
+
+        def index_of(c, x):
+            if isinstance(c, str):
+                return c.find(x)
+            for i, y in enumerate(c):
+                if eq(x, y):
+                    return i
+            return -1
+
+        reg("slice", slice_), reg("chars", lambda t: list(t)), reg("index-of", index_of)
 
         # strings
         reg("str", lambda *a: "".join(display(v) for v in a))

@@ -7,7 +7,8 @@ import difflib
 import inspect
 import os
 
-from .core import (Form, Interp, Kw, LageError, Map, Sym, Vec, parse_program)
+from .core import (Form, Interp, Kw, LageError, Map, STD_DIR, Sym, Vec, display_path, parse_program,
+                   resolve_import)
 
 SPECIAL = ("def", "defn", "fn", "if", "let", "do", "and", "or", "cond", "match", "?", "test", "import")
 
@@ -44,7 +45,7 @@ class Checker:
     def diag(self, mod, code, msg, node=None, hint=None, severity="error"):
         d = {"severity": severity, "code": code, "message": msg}
         if mod.path:
-            d["file"] = os.path.relpath(mod.path, self.root)
+            d["file"] = display_path(mod.path, self.root)
         line = getattr(node, "line", None)
         if line:
             d["line"], d["col"] = line, node.col
@@ -78,12 +79,9 @@ class Checker:
 
     def load(self, importer, path, node):
         try:
-            p = os.path.realpath(os.path.join(os.path.dirname(importer.path or self.root + "/x"), path))
-        except TypeError:
-            return None
-        if p != self.root and not p.startswith(self.root + os.sep):
-            self.diag(importer, "E_IMPORT", "import %r is outside the project root" % path, node,
-                      "imports must stay inside the directory of the entry file")
+            p = resolve_import(os.path.dirname(importer.path or self.root + "/x"), self.root, path)
+        except ValueError as ve:
+            self.diag(importer, "E_IMPORT", ve.args[0][0], node, ve.args[0][1])
             return None
         if p in self.loading:
             self.diag(importer, "E_IMPORT", "import cycle: " + " -> ".join(
@@ -114,7 +112,7 @@ class Checker:
         except LageError as e:
             d = {"severity": "error", "code": e.code, "message": e.message}
             if mod.path:
-                d["file"] = os.path.relpath(mod.path, self.root)
+                d["file"] = display_path(mod.path, self.root)
             if e.line:
                 d["line"], d["col"] = e.line, e.col
                 if 1 <= e.line <= len(mod.lines):
@@ -172,7 +170,7 @@ class Checker:
             if len(rest) > 1 and isinstance(rest[0], str):
                 rest = rest[1:]
             for c in rest:
-                if isinstance(c, Form) and c and isinstance(c[0], Sym) and c[0].name in ("effects", "requires", "ensures"):
+                if isinstance(c, Form) and c and isinstance(c[0], Sym) and c[0].name in ("effects", "requires", "ensures", "sig"):
                     if c[0].name == "effects":
                         eff += tuple(s.name for s in c[1:] if isinstance(s, Sym))
                 else:
@@ -259,13 +257,15 @@ class Checker:
                 if len(body) > 1 and isinstance(body[0], str):
                     body = body[1:]
                 while body and isinstance(body[0], Form) and body[0] and isinstance(body[0][0], Sym) \
-                        and body[0][0].name in ("effects", "requires", "ensures"):
+                        and body[0][0].name in ("effects", "requires", "ensures", "sig"):
                     c = body[0]
                     body = body[1:]
                     if c[0].name == "effects":
                         effects += tuple(s.name for s in c[1:])
                     elif c[0].name == "requires":
                         req += c[1:]
+                    elif c[0].name == "sig":
+                        pass
                     else:
                         ens += c[1:]
             inner = _Ctx(mod, ctx.top, ctx.defined, True, effects if named else ctx.effects,
