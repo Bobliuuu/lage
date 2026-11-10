@@ -67,5 +67,5 @@ reference (`--backend interp`) and the two are differential-tested on 130+ progr
 ## Status
 
 v0.3: transpiling backend with tail calls, gradual static types, stdlib (6 modules), modules, whole-program
-static checker, formatter, test runner, 274 tests (run on both backends).
+static checker, formatter, test runner, 318 tests (run on both backends).
 Not yet: native/bytecode compilation beyond Python, sig-annotated stdlib.

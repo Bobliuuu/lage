@@ -24,8 +24,9 @@ MODULES  (import "lib/m.lg" :as m) then (m/name ..). Paths are relative to the i
 TAILS    calls in tail position (last expr of fn/if/cond/let/do/match/and/or) run in constant depth; a fn
          with (ensures ..) is the exception. Non-tail recursion is capped at 2500 frames.
 BACKEND  default `py` transpiles to Python (fast); `interp` is the reference closure interpreter (env LAGE_BACKEND
-         too). Same results; differences: fuel counts user-fn calls only, effects are lexical, forms nested
-         >~100 deep raise E_INTERNAL (use --backend interp).
+         too). Same results; differences: fuel counts user-fn calls only, effects are lexical. Deeply nested forms
+         (any realistic depth: 1000s of nested calls/ifs/lists, 100s of cond clauses) are hoisted into helper
+         functions automatically; only fns nested >~90 deep inside fns raise E_INTERNAL (use --backend interp).
 TESTS    (test "n" (= a b)) never run by `lage run`; `lage test f.lg` runs them and reports left/right.
 BUILTINS + - * / mod = != < > <= >= not | len first rest last cons append nth get assoc dissoc keys vals
          has? contains? range map filter reduce sort(xs key?) reverse concat sum min max

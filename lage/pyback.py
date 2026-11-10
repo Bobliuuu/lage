@@ -195,6 +195,45 @@ def scan_binders(x, b):
             scan_binders(e, b)
 
 
+# Python refuses more than 200 nested brackets (and 100 indentation levels). Any generated expression
+# deeper than BUDGET is moved into a nested helper function `_hN()` (a thunk: it closes over the enclosing
+# function's locals, so lage scoping is untouched); statement nesting deeper than TAIL_IND likewise.
+BUDGET = 60
+CHUNK = 12        # clauses of one cond/and/or chain kept inline before the rest moves into a thunk
+TAIL_IND = 40
+_BRK = re.compile(r"""'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|([()\[\]{}])""")
+_WALRUS = re.compile(r"\(([lg]\d+_\w*) :=")
+_LREF = re.compile(r"\bl(\d+)_")
+_HCALL = re.compile(r"\b(_h\d+)\(\)")
+
+
+def maxdepth(code):
+    d = m = 0
+    for mt in _BRK.finditer(code):
+        c = mt.group(1)
+        if c is None:
+            continue
+        if c in "([{":
+            d += 1
+            if d > m:
+                m = d
+        else:
+            d -= 1
+    return m
+
+
+def deeper_than(x, n):
+    """is the AST nested more than n levels? (iterative, stops early)"""
+    stack = [(x, 0)]
+    while stack:
+        y, d = stack.pop()
+        if isinstance(y, (Form, Vec, Map)):
+            if d >= n:
+                return True
+            stack.extend((e, d + 1) for e in y)
+    return False
+
+
 class Scope:
     __slots__ = ("vars", "parent", "mod")
 
@@ -224,7 +263,7 @@ class FC:
 
     def __init__(self, meta):
         self.meta, self.lines, self.pre, self.ind, self.nt = meta, [], [], 1, 0
-        self.globals = set()
+        self.globals, self.lifted = set(), []
         self.loop, self.self_name, self.self_pid, self.params = False, None, None, ()
 
     def tmp(self):
@@ -252,10 +291,12 @@ class Gen:
     def __init__(self, it):
         self.it, self.fc, self.mod, self.pending = it, None, None, {}
         self.incall = 0  # >0 while compiling inside a call form of the current fn (mirrors interp annotate)
-        self.uidc = itertools.count(1)
+        self.uidn = 0
+        self.hlevel, self.maxhl = {}, 0  # thunk name -> how many thunk frames deep it can nest
 
     def uid(self):
-        return next(self.uidc)
+        self.uidn += 1
+        return self.uidn
 
     def nid(self, node):
         NODES.append(node)
@@ -311,7 +352,8 @@ class Gen:
                 mod.gfun[name] = (not ens) and self.may_tc(name, len(node[2]), body[-1], loop)
 
     def is_loopable(self, name, body, ens):
-        return bool(name) and self.mod.binders[name] == 1 and not ens and not contains_fn(body)
+        return bool(name) and self.mod.binders[name] == 1 and not ens and not contains_fn(body) \
+            and not any(deeper_than(b, 30) for b in body)
 
     def may_tc(self, name, nparams, last, loop):
         sp, bn, bd = self.it.special, self.it.bnames, self.mod.binders
@@ -407,13 +449,83 @@ class Gen:
     def ex(self, x, sc):
         if isinstance(x, Sym):
             return self.sym(x, sc)
+        if isinstance(x, (Form, Vec, Map)):
+            fc = self.fc
+            n, u0 = len(fc.pre), self.uidn
+            code = self.ex1(x, sc)
+            if len(code) > 150 and maxdepth(code) > BUDGET:
+                return self.hoist(code, self.take(n), u0)
+            return code
+        return self.const(x)
+
+    def ex1(self, x, sc):
         if isinstance(x, Form):
             return self.form(x, sc)
         if isinstance(x, Vec):
             return "[" + ", ".join([self.ex(e, sc) for e in x]) + "]"
-        if isinstance(x, Map):
-            return self.mapx(x, sc)
-        return self.const(x)
+        return self.mapx(x, sc)
+
+    # ---- nesting-depth hoisting ----
+    def take(self, n):
+        """remove and return the pending helper lines added since fc.pre had length n"""
+        pre = self.fc.pre
+        out = pre[n:]
+        del pre[n:]
+        return out
+
+    def assigned(self, lines, u0):
+        """(outer lage locals, globals) that walrus-assign inside `lines` and so need nonlocal/global in a helper"""
+        nl, gl = set(), set()
+        for _, t in lines:
+            for m in _WALRUS.finditer(t):
+                n = m.group(1)
+                if n[0] == "g":
+                    gl.add(n)
+                elif int(n[1:n.index("_")]) <= u0:
+                    nl.add(n)
+        return sorted(nl), sorted(gl)
+
+    def thunk_def(self, name, inner, u0):
+        """(lines of `def name():` + inner, dead bindings making the nonlocals legal)"""
+        nl, gl = self.assigned(inner, u0)
+        lvl = 1 + max([self.hlevel.get(m.group(1), 0) for _, t in inner for m in _HCALL.finditer(t)] or [0])
+        self.hlevel[name] = lvl
+        if lvl > self.maxhl:
+            self.maxhl = lvl  # python frames per lage call can reach 1 + maxhl: the recursion limit is scaled
+        head = [(0, "def %s():" % name)]
+        if nl:
+            head.append((1, "nonlocal " + ", ".join(nl)))
+        if gl:
+            head.append((1, "global " + ", ".join(gl)))
+        return [(0, "if 0: %s = None" % n) for n in nl], head + inner
+
+    def hoist(self, code, new, u0):
+        """Move expression `code` (with the helper lines `new` it needs) into a nested function; returns the call.
+        Nested thunks that touch no lage local declared inside this subtree are lifted next to it, not into it,
+        so a long chain of thunks does not nest deeper and deeper."""
+        fc = self.fc
+        name = "_h%d" % self.uid()
+        groups, cur = [], None
+        for i, t in new:
+            if i == 0 or cur is None:
+                cur = []
+                groups.append(cur)
+            cur.append((i, t))
+        inner = []
+        for g in groups:
+            if g[0][1].startswith("if 0: ") or g[0][1].startswith("def _h") and not any(int(m.group(1)) > u0 for _, t in g
+                                                        for m in _LREF.finditer(t)):
+                fc.pre.extend(g)
+            else:
+                inner.extend((i + 1, t) for i, t in g)
+        dead, lines = self.thunk_def(name, [(i, t) for i, t in inner] + [(1, "return " + code)], u0)
+        fc.pre.extend(dead)
+        fc.pre.extend(lines)
+        return name + "()"
+
+    def chain_wrap(self, out, acc, u0):
+        """a cond/and/or chain grew long: move it (and its helper lines) into a thunk"""
+        return self.hoist(out, acc, u0)
 
     def mapx(self, x, sc):
         if not x:
@@ -506,42 +618,64 @@ class Gen:
     def x_and(self, x, sc):
         if len(x) == 1:
             return "True"
+        u0 = self.uidn
+        items = self.chain_items(x, sc)
+        out, acc = self.chain_last(x, sc)
+        n = len(items)
+        for k, (cond, t, pre) in enumerate(reversed(items)):
+            out, acc = "(%s if %s else %s)" % (out, cond, t or "False"), pre + acc
+            if k % CHUNK == CHUNK - 1 and k < n - 1:
+                out, acc = self.chain_wrap(out, acc, u0), []
+        self.fc.pre.extend(acc)
+        return out
+
+    def chain_items(self, x, sc):
+        """operands of and/or except the last: (cond code, temp holding the value | None, helper lines)"""
         items = []
         for b in x[1:-1]:
+            n = len(self.fc.pre)
             if self.isbool(b, sc):
-                items.append((self.ex(b, sc), None))
+                items.append((self.ex(b, sc), None, self.take(n)))
             else:
                 t = self.fc.tmp()
-                items.append(("((%s := %s) is not None and %s is not False)" % (t, self.ex(b, sc), t), t))
+                items.append(("((%s := %s) is not None and %s is not False)" % (t, self.ex(b, sc), t), t,
+                              self.take(n)))
+        return items
+
+    def chain_last(self, x, sc):
+        n = len(self.fc.pre)
         out = self.ex(x[-1], sc)
-        for cond, t in reversed(items):
-            out = "(%s if %s else %s)" % (out, cond, t or "False")
-        return out
+        return out, self.take(n)
 
     def x_or(self, x, sc):
         if len(x) == 1:
             return "False"
-        items = []
-        for b in x[1:-1]:
-            if self.isbool(b, sc):
-                items.append((self.ex(b, sc), None))
-            else:
-                t = self.fc.tmp()
-                items.append(("((%s := %s) is not None and %s is not False)" % (t, self.ex(b, sc), t), t))
-        out = self.ex(x[-1], sc)
-        for cond, t in reversed(items):
-            out = "(%s if %s else %s)" % (t or "True", cond, out)
+        u0 = self.uidn
+        items = self.chain_items(x, sc)
+        out, acc = self.chain_last(x, sc)
+        n = len(items)
+        for k, (cond, t, pre) in enumerate(reversed(items)):
+            out, acc = "(%s if %s else %s)" % (t or "True", cond, out), pre + acc
+            if k % CHUNK == CHUNK - 1 and k < n - 1:
+                out, acc = self.chain_wrap(out, acc, u0), []
+        self.fc.pre.extend(acc)
         return out
 
     def x_cond(self, x, sc):
         if len(x) % 2 == 0:
             raise E("E_SYNTAX", "cond needs test/expr pairs", x, "end with :else expr")
+        u0, fc = self.uidn, self.fc
         pairs = []
         for t, v in zip(x[1::2], x[2::2]):
-            pairs.append((self.truth(t, sc), self.ex(v, sc)))
-        out = "None"
-        for c, v in reversed(pairs):
-            out = "(%s if %s else %s)" % (v, c, out)
+            n = len(fc.pre)
+            c = self.truth(t, sc)
+            pairs.append((c, self.ex(v, sc), self.take(n)))
+        out, acc = "None", []
+        for k, (c, v, pre) in enumerate(reversed(pairs)):
+            out, acc = "(%s if %s else %s)" % (v, c, out), pre + acc
+            if k % CHUNK == CHUNK - 1 and k < len(pairs) - 1:
+                out, acc = self.chain_wrap(out, acc, u0), []
+        fc.pre.extend(acc)
         return out
 
     def x_match(self, x, sc):
@@ -711,6 +845,24 @@ class Gen:
 
     # ---- tail position (statements) ----
     def tail(self, x, sc):
+        fc = self.fc
+        if fc.ind <= TAIL_IND or fc.loop or not isinstance(x, Form):
+            return self.tail1(x, sc)
+        # statement nesting is about to hit python's indentation limit: compile this tail into a helper
+        # function defined at function level, and `return` its result (a value or a pending tail call)
+        u0, saved_pre, saved_loop = self.uidn, fc.pre, fc.loop
+        fc.pre = []
+        try:
+            lines = self.buf(1, lambda: self.tail1(x, sc))
+        finally:
+            fc.pre = saved_pre
+        name = "_h%d" % self.uid()
+        dead, defn = self.thunk_def(name, lines, u0)
+        fc.lifted.extend(dead)
+        fc.lifted.extend(defn)
+        fc.emit("return %s()" % name)
+
+    def tail1(self, x, sc):
         if isinstance(x, Form) and x:
             h = x[0]
             if isinstance(h, Sym) and h.name in self.it.special:
@@ -896,6 +1048,7 @@ class Gen:
                 else:
                     self.tail(body[-1], fsc)
             body_lines = self.buf(bind, gen_body)
+            body_lines = [(bind + i, t) for i, t in fc.lifted] + body_lines
             args_t = "(%s)" % (", ".join(pids) + ("," if len(pids) == 1 else ""))
 
             def gen_req():
@@ -1266,7 +1419,7 @@ class PyInterp(Interp):
         depth, f = 0, sys._getframe()
         while f is not None:
             depth, f = depth + 1, f.f_back
-        sys.setrecursionlimit(depth + MAXDEPTH + 25)
+        sys.setrecursionlimit(depth + MAXDEPTH * (1 + self.gen.maxhl) + 25)
         try:
             return fn()
         except BaseException as ex:  # noqa: BLE001

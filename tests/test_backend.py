@@ -323,6 +323,108 @@ for _n, _s, _k in CORPUS:
     setattr(Differential, "test_" + _n.replace("-", "_"), _mk(_n, _s, _k))
 
 
+def nest(n, pre, post, inner):
+    return pre * n + inner + post * n
+
+
+def cond_clauses(n, val="%d"):
+    return " ".join("(= %d c) " % i + val % i for i in range(n))
+
+
+# generated programs far past python's 200-bracket / 100-indent limits: the transpiler hoists deep
+# sub-expressions into helper functions, so both backends must still agree (and never E_INTERNAL)
+DEEP = [
+    ("plus-400", nest(400, "(+ 1 ", ")", "0"), "400"),
+    ("do-400", nest(400, "(do 1 ", ")", "7"), "7"),
+    ("if-300", "(def c false) " + nest(300, "(if c 1 ", ")", "5"), "5"),
+    ("if-then-300", "(def c true) " + nest(300, "(if c ", " 2)", "5"), "5"),
+    ("cond-300-expr", "(def c 250) (+ 1 (cond %s :else 99))" % cond_clauses(300), "251"),
+    ("cond-300-none", "(def c -1) (cond %s)" % cond_clauses(300), "nil"),
+    ("list-500", "[" + " ".join("[%d [%d]]" % (i, i) for i in range(500)) + "]", None),
+    ("list-nested-400", nest(400, "[1 ", "]", "2"), None),
+    ("map-nested-300", nest(300, "{:a ", "}", "1"), None),
+    ("let-400", nest(400, "(let [x 1] (+ x ", "))", "0"), "400"),
+    ("and-or-300", "(def c true) " + nest(300, "(and c (or false ", "))", "3"), "3"),
+    ("and-flat-300", "(and " + " ".join(["true"] * 300) + " 5)", "5"),
+    ("or-flat-300", "(or " + " ".join(["nil"] * 300) + " 5)", "5"),
+    ("match-expr-300", "(+ 1 " + nest(300, "(match (ok 1) (ok v) (+ v ", ") (err e) 0)", "0") + ")", "301"),
+    ("fn-plus-400", "(defn f [x] %s) (f 2)" % nest(400, "(+ x ", ")", "1"), "801"),
+    ("fn-if-then-400", "(defn f [x] %s) (f 2)" % nest(400, "(if (> x 0) ", " 0)", "1"), "1"),
+    ("fn-loop-tail-300",
+     "(defn f [x acc] %s) (f 2 0)" % nest(300, "(if (> x 0) ", " (f (- x 1) (+ acc 1)))", "acc"), "0"),
+    ("fn-tail-recursion-deep-if",
+     "(defn f [n acc] %s) (f 3000 0)" % nest(300, "(if (> n 0) ", " 0)", "(if (= n 1) acc (f (- n 1) (+ acc 1)))"),
+     "2999"),
+    ("fn-match-tail-300", "(defn f [x] %s) (f 2)" % nest(300, "(match (ok 1) (ok v) ", " (err e) e)", "5"), "5"),
+    ("fn-tail-cond-300", "(defn g [y] (+ y 1)) (defn f [c] (cond %s :else 0)) (f 250)" % cond_clauses(300, "(g %d)"),
+     "251"),
+    ("closure-capture-deep", "(defn f [x] %s) ((f 2))" % nest(60, "(let [y x] (fn [] (+ 0 ", ")))", "y"), None),
+    ("def-in-deep-do", "(defn f [x] %s) (f 2)" % nest(300, "(do (def z 3) (+ z ", "))", "z"), "903"),
+    ("try-deep", "(defn f [r] %s) [(f (ok 1)) (f (err 2))]" % nest(300, "(+ 1 ", ")", "(? r)"), "[301 (err 2)]"),
+    ("contracts-deep",
+     "(defn f [x] (requires (> x 0)) (ensures (> result 0)) %s) [(f 1) (f 0)]" % nest(300, "(+ 1 ", ")", "x"), None),
+    ("string-parens", nest(200, '(str "((" ', ' "))")', '")("'), None),
+    ("wide-and-deep", "(+ " + " ".join(nest(40, "(+ 1 ", ")", "1") for _ in range(100)) + ")", "4100"),
+    ("rest-and-deep", "(defn f [a & r] %s) (f 1 2 3)" % nest(300, "(+ 1 ", ")", "(len r)"), "302"),
+    ("opt-default-deep", "(defn f [(a %s)] a) [(f) (f 1)]" % nest(300, "(+ 1 ", ")", "0"), "[300 1]"),
+    ("top-level-many-forms-deep", " ".join(nest(150, "(+ 1 ", ")", "%d" % i) for i in range(20)), "169"),
+    # errors inside hoisted code keep their position, message and stack
+    ("err-deep-bottom", "(defn f [x] %s) (defn g [x] (+ 1 (f x))) (g 5)" % nest(300, "(+ 1 ", ")", "(nth [1] x)"), None),
+    ("err-deep-top", nest(300, "(+ 1 ", ")", "(nth [1] 5)"), None),
+    ("err-deep-multiline", "(print 1)\n" + nest(300, "(+ 1\n ", ")", "(nth [1] 5)"), None),
+    ("err-deep-unbound", "(defn f [x] %s) (f 5)" % nest(300, "(+ 1 ", ")", "yy"), None),
+    ("err-deep-type", nest(300, "(+ 1 ", ")", '"a"'), None),
+    ("err-deep-try-top", nest(300, "(+ 1 ", ")", '(? (err 1))'), None),
+    ("err-deep-requires", "(defn f [x] (requires (> x 0)) %s) (f 0)" % nest(300, "(+ 1 ", ")", "x"), None),
+    ("err-deep-ensures", "(defn f [x] (ensures (< result 0)) %s) (f 1)" % nest(300, "(+ 1 ", ")", "x"), None),
+    ("err-deep-effect", "(defn f [] %s) (f)" % nest(300, "(do 1 ", ")", '(read-file "/nonexistent/z")'), None),
+    ("err-deep-arity", "(defn g [a] a) (defn f [] %s) (f)" % nest(300, "(do 1 ", ")", "(g 1 2)"), None),
+    ("err-deep-recursion-depth", "(defn f [n] %s) (f 1)" % nest(40, "(+ 1 ", ")", "(f n)"), None),
+    ("deep-recursion-ok", "(defn f [n] (if (= n 0) 0 %s)) (f 2000)" % nest(40, "(+ 1 ", ")", "(f (- n 1))"), "80000"),
+]
+
+
+class DeepNesting(unittest.TestCase):
+    def check(self, name, src, want):
+        a, b = both(src)
+        if not b["ok"]:
+            self.assertNotEqual(b["error"]["code"], "E_INTERNAL", name)
+        self.assertEqual(a["ok"], b["ok"], "%s\nref=%r\npy=%r" % (name, a, b))
+        self.assertEqual(a["stdout"], b["stdout"], name)
+        self.assertEqual(a["effects"], b["effects"], name)
+        if a["ok"]:
+            self.assertEqual(a["value"], b["value"], name)
+            self.assertEqual(a["json"], b["json"], name)
+            if want is not None:
+                self.assertEqual(b["value"], want, name)
+        else:
+            for k in ("code", "line", "col", "message", "hint", "stack", "source"):
+                self.assertEqual(a["error"].get(k), b["error"].get(k), "%s: %s" % (name, k))
+
+    def test_corpus_size(self):
+        self.assertGreaterEqual(len(DEEP), 40)
+
+    def test_helpers_are_generated(self):
+        it = PyInterp(capture=True)
+        big_stack(lambda: it.run(nest(400, "(+ 1 ", ")", "0")))
+        self.assertGreater(it.gen.maxhl, 0)
+
+    def test_shallow_code_is_not_hoisted(self):
+        it = PyInterp(capture=True)
+        it.run("(defn f [x] (cond (= x 1) 1 (= x 2) 2 :else (+ x (* 2 (+ 1 (if x 1 2)))))) (f 3)")
+        self.assertEqual(it.gen.maxhl, 0)
+
+
+def _mkdeep(name, src, want):
+    def t(self):
+        self.check(name, src, want)
+    return t
+
+
+for _n, _s, _w in DEEP:
+    setattr(DeepNesting, "test_" + _n.replace("-", "_"), _mkdeep(_n, _s, _w))
+
+
 class Modules(unittest.TestCase):
     def mod_check(self, files, main, **kw):
         with tempfile.TemporaryDirectory() as d:
