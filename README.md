@@ -30,6 +30,11 @@ Reference implementation in Python (stdlib only). Files use the `.lg` extension.
 | Style drift between edits | `lage fmt` is canonical and idempotent. |
 | Needing docs in context | `lage ref` prints the whole language in one screen. |
 
+## Standard library
+
+Pure-lage modules, bundled: `(import "std/list" :as l)` then `(l/zip xs ys)`.
+`std/list`, `std/str`, `std/map`, `std/math`, `std/result`, `std/json`. Function list: `lage/std/README.md`.
+
 ## Use
 
 ```sh
