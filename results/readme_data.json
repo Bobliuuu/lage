@@ -1,0 +1,72 @@
+{
+ "bench": [
+  {
+   "case": "fib(27)",
+   "interp_s": 6.004,
+   "py_s": 0.063,
+   "speedup": 95.3
+  },
+  {
+   "case": "tail sum 1e6",
+   "interp_s": 4.574,
+   "py_s": 0.09,
+   "speedup": 50.8
+  },
+  {
+   "case": "map/filter/reduce 200k",
+   "interp_s": 0.753,
+   "py_s": 0.085,
+   "speedup": 8.9
+  },
+  {
+   "case": "string building",
+   "interp_s": 0.167,
+   "py_s": 0.049,
+   "speedup": 3.4
+  }
+ ],
+ "speedup_max": 95.3,
+ "speedup_min": 3.4,
+ "tests": 323,
+ "tests_ok": true,
+ "broken_diagnostics": 3,
+ "broken_codes": [
+  "E_ARITY",
+  "E_UNBOUND"
+ ],
+ "broken_exit": 1,
+ "hint_example": "did you mean: area, assert",
+ "hello_passed": 2,
+ "hello_failed": 0,
+ "hello_steps": 30,
+ "std_modules": 6,
+ "std_functions": 71,
+ "std_rows": [
+  {
+   "module": "std/json",
+   "functions": 2
+  },
+  {
+   "module": "std/list",
+   "functions": 25
+  },
+  {
+   "module": "std/map",
+   "functions": 12
+  },
+  {
+   "module": "std/math",
+   "functions": 12
+  },
+  {
+   "module": "std/result",
+   "functions": 8
+  },
+  {
+   "module": "std/str",
+   "functions": 12
+  }
+ ],
+ "src_lines": 4113,
+ "stdlib_only": true
+}

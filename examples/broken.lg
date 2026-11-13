@@ -1,0 +1,10 @@
+; deliberately broken: lage check reports every problem in one pass
+(defn area [w h] (* w h))
+
+(print "area" (aera 3 4))
+
+(print "area" (area 3))
+
+(read-file "notes.txt")
+
+(prnt "done")

@@ -1,0 +1,26 @@
+[
+ {
+  "case": "fib(27)",
+  "interp_s": 6.004,
+  "py_s": 0.063,
+  "speedup": 95.3
+ },
+ {
+  "case": "tail sum 1e6",
+  "interp_s": 4.574,
+  "py_s": 0.09,
+  "speedup": 50.8
+ },
+ {
+  "case": "map/filter/reduce 200k",
+  "interp_s": 0.753,
+  "py_s": 0.085,
+  "speedup": 8.9
+ },
+ {
+  "case": "string building",
+  "interp_s": 0.167,
+  "py_s": 0.049,
+  "speedup": 3.4
+ }
+]

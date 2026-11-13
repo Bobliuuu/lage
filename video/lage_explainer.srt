@@ -1,0 +1,148 @@
+1
+00:00:00,400 --> 00:00:05,883
+lage: a small programming language designed for L L M agents to write, run, and debug.
+
+2
+00:00:05,883 --> 00:00:10,536
+This is a short tour of what makes it agent shaped, and what we measured.
+
+3
+00:00:11,540 --> 00:00:13,540
+Agents make particular mistakes.
+
+4
+00:00:13,540 --> 00:00:16,602
+They slip on indentation, precedence and quoting.
+
+5
+00:00:16,602 --> 00:00:19,601
+Side effects hide inside innocent looking calls.
+
+6
+00:00:19,601 --> 00:00:24,976
+And most languages report one error per run, as free text, which makes fix loops slow.
+
+7
+00:00:25,980 --> 00:00:26,767
+Here is lage.
+
+8
+00:00:26,767 --> 00:00:30,763
+The grammar is just brackets, with no operators and no precedence.
+
+9
+00:00:30,763 --> 00:00:36,273
+A function states its contract: a precondition with requires, a postcondition with ensures.
+
+10
+00:00:36,273 --> 00:00:38,695
+And the test sits right beside the code.
+
+11
+00:00:38,695 --> 00:00:43,357
+If the output is truncated, an unclosed bracket is detected as a parse error.
+
+12
+00:00:44,360 --> 00:00:49,443
+The checker reports every problem in a single pass, before anything runs.
+
+13
+00:00:49,443 --> 00:00:56,058
+On a deliberately broken example it finds all 3 errors at once, with line and column, and a did
+
+14
+00:00:56,058 --> 00:00:57,033
+you mean hint.
+
+15
+00:00:57,033 --> 00:01:00,793
+Every failure is a JSON diagnostic, not a stack trace.
+
+16
+00:01:01,790 --> 00:01:03,182
+The pipeline is simple.
+
+17
+00:01:03,182 --> 00:01:08,631
+Source is parsed, then the whole program is checked, including imports and optional types.
+
+18
+00:01:08,631 --> 00:01:14,322
+The default backend transpiles to Python and runs it, while a closure interpreter stays as the
+
+19
+00:01:14,322 --> 00:01:14,928
+reference.
+
+20
+00:01:14,928 --> 00:01:18,802
+Both are differential tested, and everything comes back as JSON.
+
+21
+00:01:19,800 --> 00:01:23,742
+Side effects must be declared by the function and granted by the run.
+
+22
+00:01:23,742 --> 00:01:28,883
+Loops are bounded by a fuel budget and a call depth cap, so a runaway program ends with an
+
+23
+00:01:28,883 --> 00:01:30,540
+error code instead of a hang.
+
+24
+00:01:30,540 --> 00:01:35,168
+There are no exceptions, and nothing is non deterministic unless it is an effect.
+
+25
+00:01:36,170 --> 00:01:36,630
+Speed.
+
+26
+00:01:36,630 --> 00:01:43,072
+The Python transpiling backend is between 3.4 and 95 times faster than the reference
+
+27
+00:01:43,072 --> 00:01:43,992
+interpreter.
+
+28
+00:01:43,992 --> 00:01:51,124
+Computing fib of twenty seven takes 6.0 seconds in the interpreter and 0.06 in the transpiled
+
+29
+00:01:51,124 --> 00:01:51,738
+backend.
+
+30
+00:01:52,740 --> 00:01:59,691
+The repo has 323 unit tests, run on both backends, and a bundled standard library of 6 pure
+
+31
+00:01:59,691 --> 00:02:02,518
+lage modules with 71 typed functions.
+
+32
+00:02:03,520 --> 00:02:04,416
+Honest caveats.
+
+33
+00:02:04,416 --> 00:02:08,835
+This is a Python reference implementation, with no native compilation yet.
+
+34
+00:02:08,835 --> 00:02:14,269
+Functions nested more than about ninety deep inside functions need the interpreter backend.
+
+35
+00:02:14,269 --> 00:02:19,346
+The benchmark ran on a shared, loaded laptop, so compare the ratios, not the seconds.
+
+36
+00:02:20,350 --> 00:02:20,762
+lage.
+
+37
+00:02:20,762 --> 00:02:25,289
+The code, the tests, and the benchmark are in the repo.
+

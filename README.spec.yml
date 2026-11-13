@@ -1,0 +1,290 @@
+# Spec for ~/video-readme-maker:  python3 tools/readme_data.py && python3 ~/video-readme-maker/vrm.py all README.spec.yml
+# Every number comes from results/readme_data.json and results/bench.json, written by tools/readme_data.py
+# (which runs bench/bench.py, the unit tests and the lage CLI on the examples).
+project:
+  name: lage
+  emoji: "🧬"
+  tagline: "A small programming language designed for LLM agents to write, run and debug"
+  repo: Bobliuuu/lage
+hero:
+  title: lage
+  subtitle: "S-expressions, contracts, effects and JSON diagnostics"
+  chips: [".lg files", stdlib-only Python, JSON diagnostics, fuel budget]
+theme: {accent: "#3ddc97", accent2: "#ff6b6b", accent3: "#f2c14e", good: "#27c8e8"}
+readme_out: README.md
+assets_dir: assets
+badges:
+  - {label: python, message: "3.9+", color: 3776ab, logo: python}
+  - {label: dependencies, message: "none (stdlib only)", color: 3ddc97}
+  - {label: tests, message: "{{ n.tests }} passing", color: 3ddc97}
+  - {label: transpiling backend, message: "up to {{ n.sp_max }} faster", color: 27c8e8}
+  - {label: output, message: "JSON diagnostics", color: f2c14e}
+  - {label: release, message: v0.1.0, color: 3ddc97, logo: github, link: "https://github.com/Bobliuuu/lage/releases/tag/v0.1.0"}
+nav:
+  - {emoji: "🎬", label: Video, anchor: video}
+  - {emoji: "🧑‍💻", label: Example, anchor: example}
+  - {emoji: "🤖", label: Agent-shaped, anchor: why-it-is-agent-shaped}
+  - {emoji: "⚡", label: Speed, anchor: speed}
+  - {emoji: "📚", label: Stdlib, anchor: standard-library}
+  - {emoji: "🚀", label: Use, anchor: use}
+  - {emoji: "⚠️", label: Status, anchor: status}
+  - {emoji: "🗺️", label: Repo map, anchor: repo-map}
+
+numbers:
+  tests: {file: results/readme_data.json, path: tests}
+  sp_max: {file: results/readme_data.json, path: speedup_max, unit: "x", fmt: "{:.0f}"}
+  sp_min: {file: results/readme_data.json, path: speedup_min, unit: "x", fmt: "{:.1f}"}
+  fib_interp: {file: results/bench.json, path: case=fib(27).interp_s, unit: " s", fmt: "{:.1f}"}
+  fib_py: {file: results/bench.json, path: case=fib(27).py_s, unit: " s", fmt: "{:.2f}"}
+  fib_sp: {file: results/bench.json, path: case=fib(27).speedup, unit: "x", fmt: "{:.0f}"}
+  tail_sp: {file: results/bench.json, path: "case=tail sum 1e6.speedup", unit: "x", fmt: "{:.0f}"}
+  mfr_sp: {file: results/bench.json, path: "case=map/filter/reduce 200k.speedup", unit: "x", fmt: "{:.0f}"}
+  diags: {file: results/readme_data.json, path: broken_diagnostics}
+  hello_pass: {file: results/readme_data.json, path: hello_passed}
+  std_mods: {file: results/readme_data.json, path: std_modules}
+  std_fns: {file: results/readme_data.json, path: std_functions}
+  src_lines: {file: results/readme_data.json, path: src_lines, fmt: "{:,.0f}"}
+
+intro: |
+  <a id="video"></a>
+  **lage** is a small language built around how an LLM agent actually fails: syntax slips, hidden side effects, one-error-per-run fix loops, free-text stack traces,
+  runaway loops. One S-expression grammar, declared **effects**, **contracts** and inline **tests** next to the code, optional gradual **types**, a whole-program
+  **checker** that reports every problem at once, and **JSON diagnostics** for every failure. The reference implementation is Python, standard library only; files use the `.lg` extension.
+
+video:
+  url: ""
+  caption: "Explainer video (with voice-over and subtitles): why an agent-shaped language, how it behaves, and what we measured"
+  mp4: video/lage_explainer.mp4
+  gif: video/preview.gif
+  srt: video/lage_explainer.srt
+  poster: video/poster.png
+  out_dir: video/.render
+  fps: 24
+  max_mb: 22
+  render_crf: 18
+  concurrency: 4
+  music: true
+  voice: {engine: openai, voice: alloy, model: gpt-4o-mini-tts, tempo: 1.15}
+  scenes:
+    - type: title
+      title: lage
+      subtitle: A programming language shaped for LLM agents
+      chips: [S-expressions, contracts, effects, JSON diagnostics]
+      say: "lage: a small programming language designed for L L M agents to write, run, and debug. This is a short tour of what makes it agent shaped, and what we measured."
+    - type: problem
+      heading: The problem
+      bullets:
+        - "Agents slip on indentation, precedence and quoting"
+        - "Side effects hide inside innocent calls"
+        - "One error per run makes fix loops slow; stack traces are free text"
+      say: "Agents make particular mistakes. They slip on indentation, precedence and quoting. Side effects hide inside innocent looking calls. And most languages report one error per run, as free text, which makes fix loops slow."
+    - type: code
+      heading: "A function with a contract and a test"
+      code: |
+        (defn fact [n]
+          "factorial"
+          (requires (>= n 0))
+          (ensures (>= result 1))
+          (if (<= n 1) 1 (* n (fact (- n 1)))))
+
+        (test "fact 5" (= (fact 5) 120))
+      highlight: [3, 4, 7]
+      say: "Here is lage. The grammar is just brackets, with no operators and no precedence. A function states its contract: a precondition with requires, a postcondition with ensures. And the test sits right beside the code. If the output is truncated, an unclosed bracket is detected as a parse error."
+    - type: terminal
+      heading: "Every problem in one pass"
+      lines:
+        - {cmd: "lage check examples/broken.lg --json"}
+        - {out: "E_UNBOUND  unbound symbol 'aera'   hint: did you mean: area"}
+        - {out: "E_ARITY    area takes 2 args, got 1"}
+        - {out: "E_UNBOUND  unbound symbol 'prnt'   hint: did you mean: print"}
+        - {cmd: "lage run examples/hello.lg --json"}
+        - {out: "{\"ok\":true, \"value\":..., \"effects_used\":[]}"}
+      say: "The checker reports every problem in a single pass, before anything runs. On a deliberately broken example it finds all {{ n.diags.numtext }} errors at once, with line and column, and a did you mean hint. Every failure is a JSON diagnostic, not a stack trace."
+    - type: architecture
+      diagram: flow
+      heading: "From source to JSON"
+      say: "The pipeline is simple. Source is parsed, then the whole program is checked, including imports and optional types. The default backend transpiles to Python and runs it, while a closure interpreter stays as the reference. Both are differential tested, and everything comes back as JSON."
+    - type: cards
+      heading: "Safe by design"
+      cards:
+        - {title: "Effects", sub: "declared and granted", lines: ["fs.read, fs.write, net, time", "A function declares them; the run must grant them"]}
+        - {title: "Budgets", sub: "no hangs", lines: ["Fuel budget and call-depth cap", "E_FUEL or E_DEPTH, never a hang"]}
+        - {title: "Deterministic", sub: "no hidden state", lines: ["Maps keep insertion order", "Clocks and randomness are effects"]}
+      footer: "No exceptions: fallible builtins return ok or err, and a question mark propagates"
+      say: "Side effects must be declared by the function and granted by the run. Loops are bounded by a fuel budget and a call depth cap, so a runaway program ends with an error code instead of a hang. There are no exceptions, and nothing is non deterministic unless it is an effect."
+    - type: chart
+      chart: speedup
+      gif: video/speedup.gif
+      gif_start: 0.4
+      gif_end: 8
+      gif_width: 900
+      gif_fps: 10
+      say: "Speed. The Python transpiling backend is between {{ n.sp_min.numtext }} and {{ n.sp_max.numtext }} times faster than the reference interpreter. Computing fib of twenty seven takes {{ n.fib_interp.numtext }} seconds in the interpreter and {{ n.fib_py.numtext }} in the transpiled backend."
+    - type: results
+      heading: "What is in the repo"
+      items:
+        - {label: "unit tests, run on both backends", number: tests}
+        - {label: "stdlib modules, pure lage", number: std_mods}
+        - {label: "typed stdlib functions", number: std_fns}
+      say: "The repo has {{ n.tests.numtext }} unit tests, run on both backends, and a bundled standard library of {{ n.std_mods.numtext }} pure lage modules with {{ n.std_fns.numtext }} typed functions."
+    - type: caveats
+      heading: "Honest caveats"
+      bullets:
+        - "Reference implementation in Python; no native or bytecode compilation yet"
+        - "lage functions nested more than about 90 deep inside functions need the interpreter backend"
+        - "Benchmarks ran on a shared, loaded laptop; compare the ratios, not the seconds"
+        - "Types are gradual and static only; unannotated code is never an error source"
+      say: "Honest caveats. This is a Python reference implementation, with no native compilation yet. Functions nested more than about ninety deep inside functions need the interpreter backend. The benchmark ran on a shared, loaded laptop, so compare the ratios, not the seconds."
+    - type: end
+      title: lage
+      subtitle: "A language an agent can write, run and debug"
+      say: "lage. The code, the tests, and the benchmark are in the repo."
+
+tables:
+  - id: bench_tbl
+    title: "Interpreter versus transpiling backend (best of 3, parse + compile + run)"
+    file: results/bench.json
+    columns:
+      - {key: case, title: Case}
+      - {key: interp_s, title: "interp (s)", align: right, fmt: "{:.3f}"}
+      - {key: py_s, title: "py (s)", align: right, fmt: "{:.3f}"}
+      - {key: speedup, title: Speedup, align: right, fmt: "{:.1f}", unit: "x"}
+    highlight: "fib(27)"
+  - id: std_tbl
+    title: "Bundled standard library (pure lage)"
+    file: results/readme_data.json
+    rows_path: std_rows
+    columns:
+      - {key: module, title: Module}
+      - {key: functions, title: "Public functions", align: right}
+
+charts:
+  - id: speedup
+    type: bar
+    title: "Speedup of the transpiling backend over the interpreter (higher is better)"
+    subtitle: "bench/bench.py, best of 3; same results checked on both backends"
+    better: higher
+    file: results/bench.json
+    label: case
+    y: speedup
+    unit: "x"
+    fmt: "{:.1f}"
+    highlight: "fib(27)"
+
+diagrams:
+  - id: flow
+    title: "From source to JSON"
+    nodes:
+      - {id: src, label: "program.lg", sub: "S-expressions, contracts, tests", col: 0, row: 0, kind: io}
+      - {id: parse, label: parse, sub: "unclosed bracket = E_PARSE", col: 1, row: 0}
+      - {id: check, label: "lage check", sub: "all unbound names, arity, effects, imports, types", col: 2, row: 0, kind: accent}
+      - {id: py, label: "py backend", sub: "transpile to Python, tail calls, default", col: 3, row: 0, kind: store}
+      - {id: interp, label: "interp backend", sub: "closure interpreter, the reference", col: 3, row: 1, kind: store}
+      - {id: out, label: "JSON result", sub: "value, stdout, steps, effects_used or a diagnostic", col: 2, row: 1, kind: io}
+    edges:
+      - {from: src, to: parse}
+      - {from: parse, to: check}
+      - {from: check, to: py, label: "run / test"}
+      - {from: check, to: interp, label: "--backend interp"}
+      - {from: py, to: out}
+      - {from: interp, to: out}
+
+sections:
+  - title: Example
+    emoji: "🧑‍💻"
+    id: example
+    body: |
+      ```lisp
+      (defn fact [n]
+        "factorial"
+        (requires (>= n 0))
+        (ensures (>= result 1))
+        (if (<= n 1) 1 (* n (fact (- n 1)))))
+
+      (test "fact 5" (= (fact 5) 120))
+      ```
+      On a deliberately broken program, `lage check examples/broken.lg --json` reports **{{ n.diags.text }} diagnostics in one pass** (unbound names with did-you-mean hints, wrong arity).
+    images:
+      - {src: video/preview.gif, alt: "animated overview of the explainer video", width: "70%"}
+  - title: Why it is agent-shaped
+    emoji: "🤖"
+    id: why-it-is-agent-shaped
+    body: |
+      | Agent problem | lage answer |
+      |---|---|
+      | Syntax slips (indentation, precedence, quoting) | One S-expression grammar. Whitespace-insensitive, no operators, no precedence. Brackets are the only structure, so truncated output is detected as `E_PARSE unclosed '('`. |
+      | Hidden side effects | Effects (`fs.read`, `fs.write`, `net`, `time`) must be declared per function **and** granted per run: `--allow fs.read`. `--json` reports `effects_used`. |
+      | "Does it work?" needs a harness | `requires` / `ensures` contracts and `(test ...)` forms live beside the code. `lage test` reports `left` / `right` on failed `=`. |
+      | Free-text stack traces | Every failure is a JSON diagnostic: `code`, `line`, `col`, `source`, `hint` (e.g. `did you mean: print`), compressed `stack`. |
+      | One error per run, slow fix loops | `lage check` reports **every** unbound name (with suggestions), wrong arity, undeclared effect, bad form and bad import in one pass, before anything executes. `run` and `test` do this first. |
+      | Wrong-type bugs that only show at runtime | Optional gradual types: `(sig [int (list str)] (result int str))`. Generics via lowercase type variables, `nil`-safety (`(if c 1 nil)` is not an `int`), result/`?`/`match` checking, builtin signatures. Unannotated code is never an error source; types are static only. |
+      | Runaway loops | Fuel budget (`--fuel`) and a call-depth cap. `E_FUEL` / `E_DEPTH`, never a hang. Tail calls run in constant depth. |
+      | Growing past one file | `(import "lib/m.lg" :as m)` with `m/name` calls. Imports are confined to the entry file's directory, cycles are errors, `_private` names stay private, the checker follows imports. |
+      | Variadic / optional params | `(defn f [a (b 10) & more] ...)`: `(b 10)` is optional (default evaluated per call, sees earlier params), `& more` collects the rest into a list; `(sig [int int & str] int)` types them. |
+      | Exceptions to forget | No exceptions. Fallible builtins return `(ok v)` / `(err e)`; `(? r)` propagates. |
+      | Non-determinism | Maps keep insertion order; no hidden clocks or randomness (`now` is an effect). |
+      | Style drift between edits | `lage fmt` is canonical and idempotent. |
+      | Needing docs in context | `lage ref` prints the whole language in one screen. |
+    diagrams: [flow]
+  - title: Speed
+    emoji: "⚡"
+    id: speed
+    body: "The default backend transpiles lage to Python source and execs it; the closure interpreter stays as the reference (`--backend interp`) and the two are differential-tested on 130+ programs. Produced by `python3 bench/bench.py` (best of 3), recorded in [`results/bench.json`](results/bench.json)."
+    highlights:
+      - {label: "Fastest speedup", number: sp_max}
+      - {label: "Slowest speedup", number: sp_min}
+      - {label: "fib(27) interp", number: fib_interp}
+      - {label: "fib(27) py", number: fib_py}
+    charts: [speedup]
+    tables: [bench_tbl]
+    after: "Timings are from a shared, heavily loaded laptop: trust the ratios, expect different absolute seconds on your machine."
+  - title: Standard library
+    emoji: "📚"
+    id: standard-library
+    body: "Pure-lage modules, bundled: `(import \"std/list\" :as l)` then `(l/zip xs ys)`. Function list: [`lage/std/README.md`](lage/std/README.md); known limits: [`lage/std/LIMITATIONS.md`](lage/std/LIMITATIONS.md)."
+    tables: [std_tbl]
+  - title: Use
+    emoji: "🚀"
+    id: use
+    body: |
+      ```sh
+      python3 -m lage ref                          # the language, one screen
+      python3 -m lage check examples/use_lib.lg --json
+      python3 -m lage run examples/hello.lg
+      python3 -m lage test examples/hello.lg --json
+      python3 -m lage run examples/files.lg --allow fs.read --json
+      echo '(+ 1 2)' | python3 -m lage run - --json
+      python3 -m lage fmt examples/hello.lg --check
+      python3 -m unittest discover -s tests
+      ```
+      `--json` on `run` prints one object, `{"ok":true,"value":..,"stdout":..,"steps":..,"effects_used":[..]}`
+      or `{"ok":false,"error":{"code":"E_UNBOUND","message":..,"line":1,"col":2,"hint":..}}`.
+      Exit codes: 0 ok, 1 runtime or test failure, 2 parse or usage error.
+  - title: Status
+    emoji: "📌"
+    id: status
+    body: |
+      Transpiling backend with tail calls and no practical nesting limit, gradual static types, a fully type-annotated stdlib, rest and optional parameters, modules,
+      whole-program static checker, `lage api`, formatter, test runner, {{ n.tests.text }} tests (run on both backends), {{ n.src_lines.text }} lines of Python.
+      Not yet: native/bytecode compilation beyond Python; lage `fn`s nested ~100 deep (Python indentation limit).
+quickstart:
+  - title: Regenerate the numbers, README and video
+    shell: |
+      python3 tools/readme_data.py
+      python3 ~/video-readme-maker/vrm.py all README.spec.yml
+caveats:
+  - "Reference implementation in Python; no native or bytecode compilation yet."
+  - "Benchmarks ran on a shared, loaded laptop; compare the ratios, not the absolute seconds."
+  - "lage `fn`s nested more than about 90 deep inside functions need `--backend interp`."
+  - "Types are gradual and static only; unannotated code is never an error source."
+repo_map:
+  - {path: lage/, desc: "the language: parser and interpreter (core), Python-transpiling backend (pyback), checker, types, CLI, `ref`, `api`"}
+  - {path: lage/std/, desc: "bundled pure-lage standard library"}
+  - {path: examples/, desc: "hello (contracts + tests), files (effects), typed and imported libraries, broken (checker demo)"}
+  - {path: tests/, desc: "unit tests, run on both backends"}
+  - {path: bench/bench.py, desc: "interpreter versus transpiling backend"}
+  - {path: results/, desc: "bench.json and readme_data.json: source of every number here"}
+  - {path: tools/readme_data.py, desc: "runs bench, tests and the CLI and writes results/"}
+  - {path: video/, desc: "explainer mp4, poster, preview gif, subtitles", generated: true}
+  - {path: assets/, desc: "generated hero, chart and diagram SVGs", generated: true}
+footer: "Generated with [video-readme-maker](https://github.com/Bobliuuu/video-readme-maker)."

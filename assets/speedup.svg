@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 324" width="980" height="324" role="img" aria-label="Speedup of the transpiling backend over the interpreter (higher is better)">
+<rect width="980" height="324" rx="16" fill="#0b0f17"/>
+<text x="32" y="44" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-weight="700" font-size="22" fill="#e6edf6">Speedup of the transpiling backend over the interpreter (higher is better)</text>
+<text x="32" y="68" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="14" fill="#8a98ad">bench/bench.py, best of 3; same results checked on both backends</text>
+<text x="216" y="118" text-anchor="end" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#e6edf6" font-weight="700">fib(27)</text>
+<rect x="230" y="96" width="600.0" height="30" rx="6" fill="#3ddc97"/>
+<text x="840.0" y="117" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#e6edf6">95.3x</text>
+<text x="216" y="164" text-anchor="end" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#8a98ad" font-weight="400">tail sum 1e6</text>
+<rect x="230" y="142" width="319.8" height="30" rx="6" fill="#263044"/>
+<text x="559.8" y="163" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#e6edf6">50.8x</text>
+<text x="216" y="210" text-anchor="end" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#8a98ad" font-weight="400">map/filter/reduce 200k</text>
+<rect x="230" y="188" width="56.0" height="30" rx="6" fill="#263044"/>
+<text x="296.0" y="209" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#e6edf6">8.9x</text>
+<text x="216" y="256" text-anchor="end" font-family="ui-sans-serif,system-ui,-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="15" fill="#8a98ad" font-weight="400">string building</text>
+<rect x="230" y="234" width="21.4" height="30" rx="6" fill="#263044"/>
+<text x="261.4" y="255" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="15" font-weight="700" fill="#e6edf6">3.4x</text>
+<text x="948" y="310" text-anchor="end" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12" fill="#8a98ad">source: results/bench.json · higher is better</text>
+</svg>
